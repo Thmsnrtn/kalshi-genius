@@ -1,15 +1,15 @@
 // src/db.ts — V2 SQLite with strategy adjustment tracking
 
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { join } from "path";
 
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
-export function getDb(): Database.Database {
+export function getDb(): Database {
   if (db) return db;
   const dbPath = process.env.DB_PATH ?? join(process.cwd(), "polybot.db");
   db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  db.exec("PRAGMA journal_mode = WAL");
   initSchema();
   return db;
 }

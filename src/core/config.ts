@@ -31,31 +31,30 @@ export const config = {
   DAILY_LOSS_LIMIT_PCT: 0.20,       // Stop after 20% daily loss
   CORRELATION_LIMIT: 0.30,          // Max 30% in correlated positions
 
-  // ── Cycle Sniper (short-duration crypto) ──
-  SNIPER_SYMBOLS: ["btcusdt", "ethusdt", "solusdt"],
-  SNIPER_ENTRY_WINDOW_START: 25,    // Enter between 25 seconds...
-  SNIPER_ENTRY_WINDOW_END: 5,       // ...and 5 seconds before cycle end
+  // ── Hourly Sniper (Kalshi crypto/finance close markets) ──
+  SNIPER_SCAN_INTERVAL_MS: 60000,   // Scan every 1 minute (hourly markets, not 5-min)
   SNIPER_MIN_CONTRACT_PRICE: 0.82,  // Only buy contracts priced $0.82-$0.96
-  SNIPER_MAX_CONTRACT_PRICE: 0.96,  // (these are near-certain outcomes)
-  SNIPER_MIN_MOMENTUM_PCT: 0.10,    // Minimum 0.10% confirmed move on exchange
-  SNIPER_ORACLE_CHECK: true,        // Cross-check Chainlink oracle (Itan Scott's Bot 2)
-  SNIPER_SCAN_INTERVAL_MS: 3000,    // Scan every 3 seconds
+  SNIPER_MAX_CONTRACT_PRICE: 0.96,
 
-  // ── NegRisk Scanner ──
-  NEGRISK_SCAN_INTERVAL_MS: 60000,  // Scan every 1 minute
-  NEGRISK_MIN_SPREAD: 0.02,         // Min 2% spread after fees
-  NEGRISK_MIN_DEPTH: 50,            // Min $50 liquidity at ask
+  // ── Monotonicity Arb (Kalshi grouped markets) ──
+  MONOTONICITY_SCAN_INTERVAL_MS: 60000,  // Scan every 1 minute
+  MONOTONICITY_MIN_EDGE_CENTS: 2,        // Min 2 cents edge
+
+  // ── Cross-Platform Scanner ──
+  CROSS_PLATFORM_SCAN_INTERVAL_MS: 300000, // Every 5 minutes
 
   // ── Claude Analysis ──
   CLAUDE_SCAN_INTERVAL_MS: 180000,  // Every 3 minutes
   CLAUDE_MARKETS_PER_SCAN: 8,       // Analyze top 8 markets
   MIN_MARKET_LIQUIDITY: 5000,
 
+  // ── Kalshi ──
+  KALSHI_ENV: (process.env.KALSHI_ENV ?? "demo") as "demo" | "production",
+  KALSHI_API_KEY_ID: process.env.KALSHI_API_KEY_ID ?? "",
+  KALSHI_PRIVATE_KEY_PATH: process.env.KALSHI_PRIVATE_KEY_PATH ?? "./kalshi_private_key.pem",
+
   // ── APIs ──
-  CLOB_API_URL: process.env.CLOB_API_URL ?? "https://clob.polymarket.com",
   GAMMA_API_URL: process.env.GAMMA_API_URL ?? "https://gamma-api.polymarket.com",
-  POLYMARKET_PRIVATE_KEY: process.env.POLYMARKET_PRIVATE_KEY ?? "",
-  POLYMARKET_WALLET_ADDRESS: process.env.POLYMARKET_WALLET_ADDRESS ?? "",
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
   CLAUDE_MODEL: process.env.CLAUDE_MODEL ?? "claude-sonnet-4-20250514",
 

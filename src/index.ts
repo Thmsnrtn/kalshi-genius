@@ -1,8 +1,8 @@
-// src/index.ts — ULTIMATE EDITION
+// src/index.ts — KALSHI EDITION
 //
 // COMPLETE ARCHITECTURE:
 //
-// Layer 1: STRATEGIES       (what to trade)
+// Layer 1: STRATEGIES       (what to trade — Kalshi-native)
 // Layer 2: EVOLUTION        (learn what works)
 // Layer 3: GENIUS           (think deeply)
 // Layer 4: META             (self-critique)
@@ -10,13 +10,22 @@
 // Layer 6: DASHBOARD        (phone-first monitoring)
 
 import { config, getPhaseParams } from "./core/config.js";
-import { fetchActiveMarkets, getMarketPrices, placeLimitOrder } from "./core/polymarket.js";
 import { calculatePosition, canTrade, meetsEdgeThreshold } from "./core/risk.js";
 import { getDb, logTrade } from "./core/db.js";
 import { notifyStartup, notifyTrade } from "./core/notify.js";
-import { startPriceFeed } from "./feeds/binance.js";
-import { scanForSniperSignals, sniperPositionSize } from "./strategies/cycle_sniper.js";
-import { scanNegRiskArbitrage } from "./strategies/negrisk_scanner.js";
+import { startPriceFeed, getPrice } from "./feeds/binance.js";
+
+// KALSHI EXCHANGE
+import { KalshiClient, kalshiMarketToUnified } from "./exchanges/kalshi/kalshi_client.js";
+import { KalshiWebSocket } from "./exchanges/kalshi/kalshi_websocket.js";
+
+// KALSHI STRATEGIES
+import {
+  scanHourlySniper,
+  scanMonotonicityArb,
+  findEconomicEvents,
+  scanCrossPlatformDivergences,
+} from "./strategies/kalshi/kalshi_strategies.js";
 
 // EVOLUTION
 import { initPerformanceTracker, recordSignal } from "./evolution/performance_tracker.js";
@@ -52,17 +61,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🧠 POLYMARKET ULTIMATE — 6-Layer Cognitive Architecture   ║
+║  🧠 KALSHI GENIUS — 6-Layer Cognitive Architecture         ║
 ╠════════════════════════════════════════════════════════════╣
 ║  Strategies × Evolution × Genius × Meta × Alpha × Monitor  ║
 ╚════════════════════════════════════════════════════════════╝`);
 
   console.log(`  Mode:      ${config.DRY_RUN ? "🧪 PAPER" : "🔴 LIVE"}`);
+  console.log(`  Exchange:  Kalshi (${config.KALSHI_ENV})`);
   console.log(`  Bankroll:  $${bankroll.toFixed(2)}`);
   console.log(`  Phase:     ${getPhaseParams(bankroll).label}`);
 
   console.log("\n  ARCHITECTURE:");
-  console.log("  1️⃣  STRATEGIES    → ⚡ sniper, 🛡️  negrisk, 🧠 council-mispricing");
+  console.log("  1️⃣  STRATEGIES    → ⚡ hourly sniper, 📐 monotonicity arb, 🧠 council, 📊 economic, 🌐 cross-platform");
   console.log("  2️⃣  EVOLUTION     → 5 loops (reflex → omega)");
   console.log("  3️⃣  GENIUS        → council, counterfactuals, hypotheses, genetics, calibration");
   console.log("  4️⃣  META          → strategy breeding, prompt evolution");
@@ -70,6 +80,37 @@ async function main() {
   console.log("  6️⃣  DASHBOARD     → phone-first monitoring\n");
 
   if (!config.ANTHROPIC_API_KEY) { console.error("❌ ANTHROPIC_API_KEY required"); process.exit(1); }
+  if (!config.KALSHI_API_KEY_ID) { console.error("❌ KALSHI_API_KEY_ID required"); process.exit(1); }
+
+  // ── Initialize Kalshi client ──
+  const kalshi = new KalshiClient({
+    environment: config.KALSHI_ENV,
+    apiKeyId: config.KALSHI_API_KEY_ID,
+    privateKeyPath: config.KALSHI_PRIVATE_KEY_PATH,
+  });
+
+  // Validate connection
+  try {
+    const balance = await kalshi.getBalance();
+    console.log(`✅ Kalshi connected (${config.KALSHI_ENV}) — Balance: $${(balance.balance / 100).toFixed(2)}`);
+  } catch (err: any) {
+    console.error(`❌ Kalshi connection failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  // ── Initialize Kalshi WebSocket ──
+  let kalshiWs: KalshiWebSocket | null = null;
+  try {
+    kalshiWs = new KalshiWebSocket({
+      environment: config.KALSHI_ENV,
+      apiKeyId: config.KALSHI_API_KEY_ID,
+      privateKeyPath: config.KALSHI_PRIVATE_KEY_PATH,
+    });
+    await kalshiWs.connect();
+  } catch (err: any) {
+    console.warn(`⚠️  Kalshi WebSocket failed (non-fatal): ${err.message}`);
+    kalshiWs = null;
+  }
 
   // Initialize all layers
   getDb();
@@ -97,19 +138,28 @@ async function main() {
   const dashboardPort = parseInt(process.env.DASHBOARD_PORT ?? "3000");
   startDashboard(dashboardPort);
 
-  // Start price feed
-  if (config.STRATEGY_CYCLE_SNIPER) {
-    startPriceFeed();
-    await sleep(5000);
-  }
+  // Start Binance price feed (used by hourly sniper for live BTC/ETH prices)
+  startPriceFeed();
+  await sleep(3000);
 
-  // Cache active markets for alpha sources
+  // Cache active Kalshi markets
   const refreshMarkets = async () => {
-    try { cachedMarkets = await fetchActiveMarkets(100); }
-    catch {}
+    try {
+      const { markets } = await kalshi.getMarkets({ status: "active", limit: 200 });
+      cachedMarkets = markets.map(kalshiMarketToUnified);
+    } catch {}
   };
   await refreshMarkets();
   setInterval(refreshMarkets, 60 * 1000);
+
+  // Subscribe to ticker updates for top markets
+  if (kalshiWs) {
+    const topTickers = cachedMarkets.slice(0, 20).map((m) => m.condition_id);
+    if (topTickers.length > 0) {
+      kalshiWs.subscribe("ticker", topTickers);
+      kalshiWs.subscribe("orderbook_delta", topTickers);
+    }
+  }
 
   // Engage all learning loops
   startEvolutionLoops(() => bankroll, STARTING_BANKROLL);
@@ -118,84 +168,81 @@ async function main() {
 
   await notifyStartup();
 
-  // ═══ Strategy 1: Cycle Sniper ═══
+  // ═══ Strategy 1: Hourly Close Sniper ═══
   if (config.STRATEGY_CYCLE_SNIPER) {
-    setInterval(async () => {
+    const runSniper = async () => {
       try {
-        if (paused || !shouldFire("cycle_sniper")) return;
+        if (paused || !shouldFire("hourly_sniper")) return;
         const regime = getCurrentRegime();
         if (regime && (regime.regime === "DEAD" || regime.regime === "VOLATILE")) return;
         const { ok } = canTrade(bankroll, openPositions);
         if (!ok) return;
 
-        const cryptoMarkets = cachedMarkets.filter((m) => m.category?.toLowerCase().includes("crypto"));
-        const signals = scanForSniperSignals(cryptoMarkets as any);
+        const signals = await scanHourlySniper(kalshi, () => ({
+          btc: getPrice("btcusdt")?.price,
+          eth: getPrice("ethusdt")?.price,
+          sol: getPrice("solusdt")?.price,
+        }));
+
         for (const sig of signals.slice(0, 1)) {
-          const baseSize = sniperPositionSize(sig, bankroll);
-          let size = applyWeightToSize("cycle_sniper", baseSize);
+          const phase = getPhaseParams(bankroll);
+          let size = bankroll * phase.kelly * sig.confidence * 0.5;
+          size = applyWeightToSize("hourly_sniper", size);
           if (regime) size *= regime.recommended_aggression;
           if (size < 0.5) continue;
 
-          // Check order book quality before executing
-          const alpha = await getFusedAlpha(sig.market_id, sig.market_question, sig.token_id, size);
-          if (alpha.execution && !alpha.execution.should_execute) {
-            console.log(`  ⛔ Sniper rejected by orderbook: ${alpha.execution.warnings.join(", ")}`);
-            continue;
-          }
-          if (alpha.execution) size = Math.min(size, alpha.execution.max_size_usd);
-
-          await executeTrade({
-            strategy: "cycle_sniper",
-            asset: sig.symbol.toLowerCase() + "usdt",
+          await executeTrade(kalshi, {
+            strategy: "hourly_sniper",
             category: "crypto",
             question: sig.market_question,
-            conditionId: sig.market_id,
-            tokenId: sig.token_id,
+            ticker: sig.ticker,
             direction: sig.direction,
             price: sig.contract_price,
             size,
             reasoning: sig.reasoning,
             edge: sig.potential_return_pct,
             confidence: sig.confidence,
-            hypothesisName: "late_cycle_sniper_wins",
+            hypothesisName: "hourly_sniper_final_minutes",
           });
         }
       } catch {}
-    }, config.SNIPER_SCAN_INTERVAL_MS);
-    console.log("⚡ Cycle sniper armed (regime + orderbook gated)");
+    };
+    setInterval(runSniper, config.SNIPER_SCAN_INTERVAL_MS);
+    console.log("⚡ Hourly close sniper armed");
   }
 
-  // ═══ Strategy 2: NegRisk ═══
+  // ═══ Strategy 2: Monotonicity Arb ═══
   if (config.STRATEGY_NEGRISK_ARB) {
-    const runNegRisk = async () => {
+    const runMonotonicity = async () => {
       try {
-        if (paused || !shouldFire("negrisk_arb")) return;
-        const opps = await scanNegRiskArbitrage();
-        for (const opp of opps.slice(0, 3)) {
-          const baseSize = calculatePosition(opp.net_spread, opp.total_cost, bankroll, "negrisk_arb");
-          const size = applyWeightToSize("negrisk_arb", baseSize);
+        if (paused || !shouldFire("monotonicity_arb")) return;
+        const violations = await scanMonotonicityArb(kalshi);
+        for (const v of violations.slice(0, 3)) {
+          const edgePct = v.edge_cents / 100;
+          const baseSize = calculatePosition(edgePct, v.market_a.yes_ask / 100, bankroll, "monotonicity_arb");
+          const size = applyWeightToSize("monotonicity_arb", baseSize);
           if (size < 1) continue;
-          for (const m of opp.markets) {
-            const tokenId = opp.direction === "BUY_ALL_YES" ? m.yes_token_id : m.no_token_id;
-            const price = opp.direction === "BUY_ALL_YES" ? m.yes_price : m.no_price;
-            await executeTrade({
-              strategy: "negrisk_arb",
-              asset: null, category: "negrisk",
-              question: `[NegRisk] ${m.question}`,
-              conditionId: m.condition_id, tokenId,
-              direction: opp.direction === "BUY_ALL_YES" ? "YES" : "NO",
-              price, size: size / opp.markets.length,
-              reasoning: `Risk-free arb, ${opp.roi_pct.toFixed(1)}% ROI`,
-              edge: opp.net_spread, confidence: 0.99,
-              hypothesisName: "negrisk_always_profitable",
-            });
-          }
+
+          // Buy the cheaper higher-strike YES
+          await executeTrade(kalshi, {
+            strategy: "monotonicity_arb",
+            category: "arb",
+            question: `[Arb] ${v.market_a.question} vs ${v.market_b.question}`,
+            ticker: v.market_a.ticker,
+            direction: "YES",
+            price: v.market_a.yes_ask / 100,
+            size,
+            reasoning: v.reasoning,
+            edge: edgePct,
+            confidence: 0.95,
+            hypothesisName: "monotonicity_always_profitable",
+          });
         }
-      } catch (err: any) { console.error(`NegRisk: ${err.message}`); }
+      } catch (err: any) { console.error(`Monotonicity: ${err.message}`); }
     };
-    setTimeout(runNegRisk, 8000);
-    setInterval(runNegRisk, config.NEGRISK_SCAN_INTERVAL_MS);
-    console.log("🛡️  NegRisk scanner armed");
+    setTimeout(runMonotonicity, 8000);
+    setInterval(runMonotonicity, config.MONOTONICITY_SCAN_INTERVAL_MS);
+    console.log("📐 Monotonicity arb scanner armed");
   }
 
   // ═══ Strategy 3: Council-Deliberated Mispricing (alpha-aware) ═══
@@ -210,13 +257,11 @@ async function main() {
 
         console.log("\n── 🧠 Cognitive Council (alpha-aware) ──");
 
-        // PRIORITIZE: markets with alpha signals get analyzed first
         const triggered = getTriggeredAlphaMarkets();
         if (triggered.length > 0) {
           console.log(`  🎯 ${triggered.length} markets with alpha signals`);
         }
 
-        // Get markets to analyze — prioritize triggered, fall back to liquid
         const liquid = cachedMarkets.filter((m) => m.volume >= config.MIN_MARKET_LIQUIDITY);
         const toAnalyze = [
           ...liquid.filter((m) => triggered.some((t) => m.condition_id === t.market_id || m.question.slice(0, 30) === t.market_id.slice(0, 30))),
@@ -226,12 +271,14 @@ async function main() {
         for (const market of toAnalyze) {
           await sleep(3000);
           try {
-            const { yesPrice, noPrice, yesTokenId, noTokenId } = getMarketPrices(market);
+            const yesPrice = market.yes_price;
+            const noPrice = market.no_price;
+            const yesTokenId = market.yes_token_id;
+            const noTokenId = market.no_token_id;
 
-            // Fuse alpha sources for this specific market
+            // Fuse alpha sources
             const alpha = await getFusedAlpha(market.condition_id, market.question, yesTokenId, 5);
 
-            // Show alpha context in logs
             if (alpha.news_signals.length > 0) {
               console.log(`  📰 ${alpha.news_signals.length} news signals: ${alpha.news_signals[0].reasoning.slice(0, 80)}`);
             }
@@ -241,18 +288,14 @@ async function main() {
             if (alpha.microstructure_signal) {
               console.log(`  📊 ${alpha.microstructure_signal.signal_type}: ${alpha.microstructure_signal.reasoning}`);
             }
-
-            // Execution gate
             if (alpha.execution && !alpha.execution.should_execute) {
               console.log(`  ⛔ Orderbook rejected: ${alpha.execution.warnings.join(", ")}`);
               continue;
             }
 
-            // Convene council
             console.log(`  ⚖️  Council on: ${market.question.slice(0, 60)}...`);
             const verdict = await deliberate(market.question, market.description, yesPrice, noPrice, market.category, bankroll);
 
-            // Store as latest for dashboard
             latestVerdict = {
               question: market.question,
               verdict: verdict.verdict,
@@ -273,23 +316,20 @@ async function main() {
             const baseSize = calculatePosition(Math.abs(verdict.edge), price, bankroll, "mispricing");
             let size = applyWeightToSize("mispricing", baseSize) * verdict.size_multiplier;
 
-            // Boost size if alpha signals agree with council
             if (alpha.combined_direction_hint === verdict.direction) {
               size *= 1.2;
               console.log(`     💪 Alpha confirms council → +20% size`);
             }
-
             if (alpha.execution) size = Math.min(size, alpha.execution.max_size_usd);
             if (size < 0.5) continue;
 
-            // Mark news signals as acted on
             for (const ns of alpha.news_signals) markActedOn(ns.news_id);
 
-            await executeTrade({
+            await executeTrade(kalshi, {
               strategy: "mispricing",
-              asset: null, category: market.category,
-              question: market.question, conditionId: market.condition_id,
-              tokenId: verdict.direction === "YES" ? yesTokenId : noTokenId,
+              category: market.category,
+              question: market.question,
+              ticker: market.condition_id,
               direction: verdict.direction as "YES" | "NO",
               price, size,
               reasoning: verdict.judge_reasoning,
@@ -309,28 +349,68 @@ async function main() {
     console.log("🧠 Alpha-aware Council armed");
   }
 
+  // ═══ Strategy 4: Cross-Platform Divergence ═══
+  {
+    const runCrossPlatform = async () => {
+      try {
+        if (paused) return;
+        const divergences = await scanCrossPlatformDivergences(kalshi);
+        for (const d of divergences.slice(0, 2)) {
+          const { ok } = canTrade(bankroll, openPositions);
+          if (!ok) break;
+
+          const price = d.trade_direction === "YES" ? d.kalshi_yes_price : (1 - d.kalshi_yes_price);
+          const baseSize = calculatePosition(Math.abs(d.divergence), price, bankroll, "cross_platform");
+          const size = applyWeightToSize("cross_platform", baseSize);
+          if (size < 0.5) continue;
+
+          await executeTrade(kalshi, {
+            strategy: "cross_platform",
+            category: "arb",
+            question: `[XPlat] ${d.polymarket_question}`,
+            ticker: d.kalshi_ticker,
+            direction: d.trade_direction,
+            price, size,
+            reasoning: d.reasoning,
+            edge: Math.abs(d.divergence),
+            confidence: 0.7,
+            hypothesisName: "cross_platform_convergence",
+          });
+        }
+      } catch {}
+    };
+    setTimeout(runCrossPlatform, 20000);
+    setInterval(runCrossPlatform, config.CROSS_PLATFORM_SCAN_INTERVAL_MS);
+    console.log("🌐 Cross-platform divergence scanner armed");
+  }
+
   console.log(`\n✅ ALL SYSTEMS LIVE\n`);
   console.log(`📱 Dashboard: http://localhost:${dashboardPort}`);
   console.log(`📱 Pin to iOS home screen for native-like experience\n`);
 }
 
-async function executeTrade(params: {
-  strategy: string; asset: string | null; category: string;
-  question: string; conditionId: string; tokenId: string;
+async function executeTrade(kalshi: KalshiClient, params: {
+  strategy: string; category: string;
+  question: string; ticker: string;
   direction: "YES" | "NO"; price: number; size: number;
   reasoning: string; edge: number; confidence: number;
   councilVerdict?: any;
   hypothesisName?: string;
 }) {
   const signalId = genSignalId(params.strategy);
-  const tag = ({ cycle_sniper: "⚡", negrisk_arb: "🛡️", mispricing: "🧠" } as any)[params.strategy] ?? "📊";
+  const tag = ({
+    hourly_sniper: "⚡",
+    monotonicity_arb: "📐",
+    mispricing: "🧠",
+    cross_platform: "🌐",
+  } as any)[params.strategy] ?? "📊";
   const w = getWeight(params.strategy);
 
   console.log(`  ${config.DRY_RUN ? "🧪" : "🔴"}${tag} ${params.direction} $${params.size.toFixed(2)} @ $${params.price.toFixed(2)} [${params.strategy} w:${w?.weight.toFixed(2) ?? "1.00"}]`);
 
   recordSignal({
     signal_id: signalId, strategy: params.strategy,
-    asset: params.asset, category: params.category,
+    asset: null, category: params.category,
     hour_of_day: new Date().getUTCHours(), day_of_week: new Date().getUTCDay(),
     confidence: params.confidence, predicted_edge: params.edge,
     position_size: params.size, market_volatility: 0, bankroll_at_entry: bankroll,
@@ -344,15 +424,28 @@ async function executeTrade(params: {
     confidence: params.confidence, verdict: params.councilVerdict,
   });
 
-  const result = await placeLimitOrder({
-    tokenID: params.tokenId, price: params.price,
-    size: Math.floor(params.size / params.price),
-    side: "BUY", feeRateBps: 0,
-  });
+  let result: any;
+  if (config.DRY_RUN) {
+    result = { status: "dry_run", ticker: params.ticker, direction: params.direction, size: params.size };
+  } else {
+    const count = Math.max(1, Math.floor(params.size / params.price));
+    result = await kalshi.placeOrder({
+      ticker: params.ticker,
+      side: params.direction === "YES" ? "yes" : "no",
+      action: "buy",
+      type: "limit",
+      count,
+      yes_price: params.direction === "YES" ? Math.floor(params.price * 100) : undefined,
+      no_price: params.direction === "NO" ? Math.floor((1 - params.price) * 100) : undefined,
+      client_order_id: signalId,
+      post_only: true,
+    });
+  }
 
   logTrade({
-    market_question: params.question, condition_id: params.conditionId,
-    token_id: params.tokenId, strategy: params.strategy,
+    market_question: params.question, condition_id: params.ticker,
+    token_id: `${params.ticker}-${params.direction.toLowerCase()}`,
+    strategy: params.strategy,
     side: params.direction, price: params.price, size: params.size, cost: params.size,
     dry_run: config.DRY_RUN, order_response: JSON.stringify(result),
   });
@@ -374,8 +467,8 @@ async function executeTrade(params: {
 
 function simulateResolution(signalId: string, params: any) {
   const winProbs: Record<string, number> = {
-    cycle_sniper: 0.88, negrisk_arb: 0.99, mispricing: 0.68,
-    cross_correlation: 0.75, whale_consensus: 0.65,
+    hourly_sniper: 0.85, monotonicity_arb: 0.95, mispricing: 0.68,
+    cross_platform: 0.72, economic_release: 0.60, weather_edge: 0.55,
   };
   const winProb = winProbs[params.strategy] ?? 0.60;
   const won = Math.random() < winProb;
@@ -387,7 +480,7 @@ function simulateResolution(signalId: string, params: any) {
   openPositions--;
 
   reflexLoop({
-    signalId, strategy: params.strategy, asset: params.asset, category: params.category,
+    signalId, strategy: params.strategy, asset: null, category: params.category,
     won, pnl,
     narrative: `${params.strategy} ${params.direction} at $${params.price.toFixed(2)} $${params.size.toFixed(2)}`,
     context: { edge: params.edge, confidence: params.confidence, regime: getCurrentRegime()?.regime },

@@ -205,7 +205,7 @@ export async function breed(): Promise<{ created: boolean; child?: string }> {
      status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    child.name, child.parent_1, child.parent_2, child.generation,
+    child.name, child.parent_1 ?? null, child.parent_2 ?? null, child.generation,
     child.min_edge, child.min_confidence, child.max_position_pct,
     JSON.stringify(child.preferred_regime),
     JSON.stringify(child.preferred_categories),
