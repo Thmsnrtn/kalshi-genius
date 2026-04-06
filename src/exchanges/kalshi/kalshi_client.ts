@@ -30,28 +30,35 @@ export interface KalshiMarket {
   event_ticker: string;
   market_type: string;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   yes_sub_title: string;
   no_sub_title: string;
   open_time: string;
   close_time: string;
   expected_expiration_time: string;
   status: "active" | "closed" | "settled";
-  yes_bid: number;          // Cents 0-100
+  // V2 API uses dollar-denominated string fields
+  yes_bid_dollars: string;
+  yes_ask_dollars: string;
+  no_bid_dollars: string;
+  no_ask_dollars: string;
+  last_price_dollars: string;
+  previous_yes_bid_dollars: string;
+  previous_yes_ask_dollars: string;
+  previous_price_dollars: string;
+  volume_fp: string;
+  volume_24h_fp: string;
+  liquidity_dollars: string;
+  open_interest_fp: string;
+  result: string;
+  category?: string;
+  // Convenience getters (computed)
+  yes_bid: number;
   yes_ask: number;
   no_bid: number;
   no_ask: number;
-  last_price: number;
-  previous_yes_bid: number;
-  previous_yes_ask: number;
   volume: number;
   volume_24h: number;
-  liquidity: number;
-  open_interest: number;
-  result: string;
-  category: string;
-  // Subpenny pricing in dollars
-  yes_price_dollars?: string;
 }
 
 export interface KalshiOrderBook {
@@ -104,29 +111,32 @@ export interface KalshiBalance {
   payout: number;
 }
 
-const HOSTS: Record<KalshiEnvironment, string> = {
-  demo: "https://demo-api.kalshi.co/trade-api/v2",
-  production: "https://api.elections.kalshi.com/trade-api/v2",
+const BASE_URLS: Record<KalshiEnvironment, string> = {
+  demo: "https://demo-api.kalshi.co",
+  production: "https://api.elections.kalshi.com",
 };
 
+const API_PREFIX = "/trade-api/v2";
+
 export class KalshiClient {
-  private host: string;
+  private baseUrl: string;
   private apiKeyId: string;
   private privateKey: KeyObject;
 
   constructor(config: KalshiConfig) {
-    this.host = HOSTS[config.environment];
+    this.baseUrl = BASE_URLS[config.environment];
     this.apiKeyId = config.apiKeyId;
     const keyPem = readFileSync(config.privateKeyPath, "utf-8");
     this.privateKey = createPrivateKey({ key: keyPem, format: "pem" });
   }
 
   // ── RSA-PSS request signing ──
-  // Kalshi requires the timestamp + HTTP method + path to be signed
-  // and sent in the KALSHI-ACCESS-* headers.
+  // Kalshi requires signing: timestamp + method + FULL path (including /trade-api/v2 prefix)
+  // Query parameters must be stripped before signing.
   private signRequest(method: string, path: string): { headers: Record<string, string> } {
     const timestamp = Date.now().toString();
-    const messageToSign = `${timestamp}${method}${path}`;
+    const fullPath = `${API_PREFIX}${path}`.split("?")[0];
+    const messageToSign = `${timestamp}${method}${fullPath}`;
     const signer = createSign("sha256");
     signer.update(messageToSign);
     signer.end();
@@ -149,7 +159,7 @@ export class KalshiClient {
   // ── Generic authenticated request ──
   private async request<T>(method: string, path: string, body?: any): Promise<T> {
     const { headers } = this.signRequest(method, path);
-    const url = `${this.host}${path}`;
+    const url = `${this.baseUrl}${API_PREFIX}${path}`;
 
     const res = await fetch(url, {
       method,
@@ -172,7 +182,7 @@ export class KalshiClient {
     cursor?: string;
     event_ticker?: string;
     series_ticker?: string;
-    status?: "active" | "closed" | "settled";
+    status?: string;
     tickers?: string[];
   } = {}): Promise<{ markets: KalshiMarket[]; cursor: string }> {
     const params = new URLSearchParams();
@@ -184,11 +194,13 @@ export class KalshiClient {
     if (opts.tickers) params.set("tickers", opts.tickers.join(","));
 
     const path = `/markets?${params.toString()}`;
-    return this.request<{ markets: KalshiMarket[]; cursor: string }>("GET", path);
+    const raw = await this.request<{ markets: any[]; cursor: string }>("GET", path);
+    return { cursor: raw.cursor, markets: raw.markets.map(parseKalshiMarket) };
   }
 
   async getMarket(ticker: string): Promise<{ market: KalshiMarket }> {
-    return this.request("GET", `/markets/${ticker}`);
+    const raw = await this.request<{ market: any }>("GET", `/markets/${ticker}`);
+    return { market: parseKalshiMarket(raw.market) };
   }
 
   async getEvents(opts: {
@@ -262,6 +274,23 @@ export class KalshiClient {
   }
 }
 
+// ── Parse raw API response into typed KalshiMarket ──
+function parseKalshiMarket(raw: any): KalshiMarket {
+  const yesBid = parseFloat(raw.yes_bid_dollars ?? "0");
+  const yesAsk = parseFloat(raw.yes_ask_dollars ?? "0");
+  const noBid = parseFloat(raw.no_bid_dollars ?? "0");
+  const noAsk = parseFloat(raw.no_ask_dollars ?? "0");
+  return {
+    ...raw,
+    yes_bid: Math.round(yesBid * 100),
+    yes_ask: Math.round(yesAsk * 100),
+    no_bid: Math.round(noBid * 100),
+    no_ask: Math.round(noAsk * 100),
+    volume: parseFloat(raw.volume_fp ?? "0"),
+    volume_24h: parseFloat(raw.volume_24h_fp ?? "0"),
+  };
+}
+
 // ── Helper: convert cents to probability (0-1) ──
 export function centsToProbability(cents: number): number {
   return cents / 100;
@@ -274,13 +303,17 @@ export function probabilityToCents(prob: number): number {
 
 // ── Helper: convert Kalshi market to unified Market interface ──
 export function kalshiMarketToUnified(km: KalshiMarket) {
-  const yesPrice = (km.yes_bid + km.yes_ask) / 2 / 100; // Mid-price in dollars
-  const noPrice = (km.no_bid + km.no_ask) / 2 / 100;
+  const yesPrice = km.yes_bid + km.yes_ask > 0
+    ? (km.yes_bid + km.yes_ask) / 2 / 100
+    : parseFloat((km as any).last_price_dollars ?? "0.50");
+  const noPrice = km.no_bid + km.no_ask > 0
+    ? (km.no_bid + km.no_ask) / 2 / 100
+    : 1 - yesPrice;
   return {
     condition_id: km.ticker,
     question: km.title,
-    description: km.subtitle,
-    category: km.category,
+    description: km.subtitle ?? km.yes_sub_title,
+    category: km.category ?? km.event_ticker.split("-")[0],
     volume: km.volume_24h,
     yes_price: yesPrice,
     no_price: noPrice,

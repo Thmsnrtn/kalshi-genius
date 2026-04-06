@@ -69,7 +69,6 @@ export async function scanHourlySniper(
     try {
       const { markets } = await client.getMarkets({
         series_ticker: series,
-        status: "active",
         limit: 50,
       });
 
@@ -171,7 +170,6 @@ export async function scanMonotonicityArb(client: KalshiClient): Promise<Monoton
   try {
     // Get events with nested markets — these are the grouped contract structures
     const data: any = await client.getEvents({
-      status: "active",
       with_nested_markets: true,
       limit: 50,
     });
@@ -250,7 +248,7 @@ export async function findEconomicEvents(client: KalshiClient): Promise<Economic
   const now = Date.now();
 
   try {
-    const { markets } = await client.getMarkets({ status: "active", limit: 200 });
+    const { markets } = await client.getMarkets({ limit: 200 });
 
     for (const m of markets) {
       let category: EconomicReleaseEvent["category"] | null = null;
@@ -304,7 +302,7 @@ export async function scanWeatherMarkets(client: KalshiClient): Promise<WeatherM
   const signals: WeatherMarketSignal[] = [];
 
   try {
-    const { markets } = await client.getMarkets({ status: "active", limit: 200 });
+    const { markets } = await client.getMarkets({ limit: 200 });
     const weatherMarkets = markets.filter((m) => 
       /weather|temperature|snow|rain|hurricane|storm|snowfall|°F|°C/i.test(m.title) ||
       /weather|temperature|snow|rain|hurricane|storm/i.test(m.subtitle ?? "")
@@ -361,8 +359,7 @@ export async function scanCrossPlatformDivergences(client: KalshiClient): Promis
 
   try {
     // Get Kalshi political and economic markets (most likely to overlap)
-    const { markets: kalshiMarkets } = await client.getMarkets({ 
-      status: "active", 
+    const { markets: kalshiMarkets } = await client.getMarkets({
       limit: 100,
     });
 

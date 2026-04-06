@@ -145,7 +145,7 @@ async function main() {
   // Cache active Kalshi markets
   const refreshMarkets = async () => {
     try {
-      const { markets } = await kalshi.getMarkets({ status: "active", limit: 200 });
+      const { markets } = await kalshi.getMarkets({ limit: 200 });
       cachedMarkets = markets.map(kalshiMarketToUnified);
     } catch {}
   };
