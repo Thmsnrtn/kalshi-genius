@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Genius">
+  <title>🧠 Genius</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background: radial-gradient(ellipse at top, #1a1a2e 0%, #0a0a0f 50%);
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      color: #e5e7eb;
+    }
+    .glass {
+      background: rgba(24, 24, 36, 0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .pulse-dot {
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.15); }
+    }
+    .shimmer {
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+      background-size: 200% 100%;
+      animation: shimmer 2s infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, #a78bfa 0%, #60a5fa 50%, #34d399 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .trade-flash {
+      animation: flash 0.6s ease-out;
+    }
+    @keyframes flash {
+      0% { background: rgba(52, 211, 153, 0.3); }
+      100% { background: transparent; }
+    }
+    /* Hide scrollbar but allow scroll */
+    .scroll-x::-webkit-scrollbar { display: none; }
+    .scroll-x { -ms-overflow-style: none; scrollbar-width: none; }
+    /* Smooth number changes */
+    .num-transition { transition: color 0.3s ease; }
+    /* Touch ripple effect */
+    button:active { transform: scale(0.96); }
+    button { transition: transform 0.1s; }
+  </style>
+</head>
+<body class="pb-20">
+  <!-- Header -->
+  <header class="sticky top-0 z-20 glass px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">🧠</span>
+      <div>
+        <h1 class="text-sm font-bold gradient-text">GENIUS</h1>
+        <p class="text-[10px] text-gray-500" id="mode">loading...</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-green-400 pulse-dot" id="status-dot"></div>
+      <span class="text-xs text-gray-400" id="last-update">—</span>
+    </div>
+  </header>
+
+  <main class="px-4 pt-4 space-y-4 max-w-xl mx-auto">
+
+    <!-- HERO: Bankroll -->
+    <section class="glass rounded-3xl p-6 text-center">
+      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Current Bankroll</p>
+      <h2 class="text-5xl font-bold gradient-text num-transition" id="bankroll">$—</h2>
+      <div class="flex justify-center gap-4 mt-3 text-sm">
+        <div>
+          <span id="today-pnl" class="font-semibold">—</span>
+          <span class="text-gray-500 text-xs ml-1">today</span>
+        </div>
+        <div class="w-px bg-gray-700"></div>
+        <div>
+          <span id="total-return" class="font-semibold">—</span>
+          <span class="text-gray-500 text-xs ml-1">all-time</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quick Stats -->
+    <section class="grid grid-cols-3 gap-3">
+      <div class="glass rounded-2xl p-3 text-center">
+        <p class="text-2xl font-bold" id="trades-today">—</p>
+        <p class="text-[10px] text-gray-500 uppercase">Trades</p>
+      </div>
+      <div class="glass rounded-2xl p-3 text-center">
+        <p class="text-2xl font-bold text-green-400" id="win-rate">—</p>
+        <p class="text-[10px] text-gray-500 uppercase">Win Rate</p>
+      </div>
+      <div class="glass rounded-2xl p-3 text-center">
+        <p class="text-2xl font-bold text-blue-400" id="open-positions">—</p>
+        <p class="text-[10px] text-gray-500 uppercase">Open</p>
+      </div>
+    </section>
+
+    <!-- Current Regime -->
+    <section class="glass rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Market Regime</p>
+        <span class="text-[10px] text-gray-500" id="regime-updated">—</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-lg font-bold" id="regime-name">—</p>
+          <p class="text-xs text-gray-500" id="regime-conf">—</p>
+        </div>
+        <div class="text-right">
+          <p class="text-sm text-blue-400 font-bold" id="regime-aggression">—</p>
+          <p class="text-[10px] text-gray-500">aggression</p>
+        </div>
+      </div>
+      <p class="text-[10px] text-gray-500 mt-2" id="regime-rec">—</p>
+    </section>
+
+    <!-- Strategy Weights -->
+    <section class="glass rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Strategy Weights</p>
+        <span class="text-[10px] text-gray-500">bayesian</span>
+      </div>
+      <div class="space-y-2" id="strategy-weights">
+        <div class="h-4 rounded shimmer"></div>
+        <div class="h-4 rounded shimmer"></div>
+        <div class="h-4 rounded shimmer"></div>
+      </div>
+    </section>
+
+    <!-- Recent Trades -->
+    <section class="glass rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Recent Trades</p>
+        <span class="text-[10px] text-gray-500" id="trade-count">—</span>
+      </div>
+      <div class="space-y-2 max-h-96 overflow-y-auto" id="trades-feed">
+        <div class="h-10 rounded shimmer"></div>
+        <div class="h-10 rounded shimmer"></div>
+        <div class="h-10 rounded shimmer"></div>
+      </div>
+    </section>
+
+    <!-- Latest Council Verdict -->
+    <section class="glass rounded-2xl p-4">
+      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">⚖️ Latest Council Verdict</p>
+      <div id="latest-verdict">
+        <div class="h-20 rounded shimmer"></div>
+      </div>
+    </section>
+
+    <!-- Hypothesis Lab -->
+    <section class="glass rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider">🔬 Validated Edges</p>
+        <span class="text-[10px] text-gray-500" id="lab-total">—</span>
+      </div>
+      <div class="space-y-2" id="hypotheses">
+        <div class="h-8 rounded shimmer"></div>
+        <div class="h-8 rounded shimmer"></div>
+      </div>
+    </section>
+
+    <!-- Genetics -->
+    <section class="glass rounded-2xl p-4">
+      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">🧬 Strategy Genetics</p>
+      <div class="grid grid-cols-4 gap-2 text-center">
+        <div>
+          <p class="text-xl font-bold text-green-400" id="gen-active">—</p>
+          <p class="text-[9px] text-gray-500 uppercase">Active</p>
+        </div>
+        <div>
+          <p class="text-xl font-bold text-yellow-400" id="gen-testing">—</p>
+          <p class="text-[9px] text-gray-500 uppercase">Testing</p>
+        </div>
+        <div>
+          <p class="text-xl font-bold text-gray-400" id="gen-archived">—</p>
+          <p class="text-[9px] text-gray-500 uppercase">Archived</p>
+        </div>
+        <div>
+          <p class="text-xl font-bold text-purple-400" id="gen-generations">—</p>
+          <p class="text-[9px] text-gray-500 uppercase">Gen</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Calibration & Evolution -->
+    <section class="grid grid-cols-2 gap-3">
+      <div class="glass rounded-2xl p-4">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-2">🎯 Calibration</p>
+        <p class="text-2xl font-bold" id="brier">—</p>
+        <p class="text-[10px] text-gray-500">Brier score</p>
+        <p class="text-[10px] mt-1" id="cal-bias">—</p>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-2">🔄 Evolution</p>
+        <p class="text-2xl font-bold" id="evo-cycles">—</p>
+        <p class="text-[10px] text-gray-500">cycles run</p>
+        <p class="text-[10px] mt-1 text-gray-400"><span id="evo-patterns">0</span> patterns · <span id="evo-prompts">0</span> prompts</p>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section class="glass rounded-2xl p-4">
+      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Controls</p>
+      <div class="grid grid-cols-2 gap-3">
+        <button onclick="toggleBot()" class="bg-white/10 hover:bg-white/20 rounded-xl py-3 text-sm font-semibold" id="pause-btn">⏸ Pause</button>
+        <button onclick="refresh()" class="bg-white/10 hover:bg-white/20 rounded-xl py-3 text-sm font-semibold">🔄 Refresh</button>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="text-center text-[10px] text-gray-600 pt-4">
+      <p>Polymarket Genius v5 · 4-layer cognitive architecture</p>
+      <p id="uptime" class="mt-1">—</p>
+    </footer>
+  </main>
+
+  <script>
+    let lastBankroll = null;
+    let paused = false;
+
+    async function fetchSnapshot() {
+      try {
+        const res = await fetch('/api/snapshot');
+        if (!res.ok) throw new Error('API error');
+        const data = await res.json();
+        render(data);
+        document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-green-400 pulse-dot';
+        document.getElementById('last-update').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      } catch (e) {
+        document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-red-500 pulse-dot';
+        document.getElementById('last-update').textContent = 'offline';
+      }
+    }
+
+    function render(d) {
+      // Mode
+      document.getElementById('mode').textContent = `${d.mode} · ${d.phase}`;
+
+      // Bankroll (with flash on change)
+      const bankrollEl = document.getElementById('bankroll');
+      bankrollEl.textContent = `$${d.bankroll.toFixed(2)}`;
+      if (lastBankroll !== null && d.bankroll !== lastBankroll) {
+        bankrollEl.style.color = d.bankroll > lastBankroll ? '#34d399' : '#f87171';
+        setTimeout(() => bankrollEl.style.color = '', 800);
+      }
+      lastBankroll = d.bankroll;
+
+      // Today P&L
+      const pnlEl = document.getElementById('today-pnl');
+      const sign = d.today_pnl >= 0 ? '+' : '';
+      pnlEl.textContent = `${sign}$${d.today_pnl.toFixed(2)}`;
+      pnlEl.className = `font-semibold ${d.today_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+      // Total return
+      const totalEl = document.getElementById('total-return');
+      const totalSign = d.total_return_pct >= 0 ? '+' : '';
+      totalEl.textContent = `${totalSign}${d.total_return_pct.toFixed(1)}%`;
+      totalEl.className = `font-semibold ${d.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+      // Quick stats
+      document.getElementById('trades-today').textContent = d.trades_today;
+      document.getElementById('win-rate').textContent = d.win_rate === null ? '—' : `${(d.win_rate * 100).toFixed(0)}%`;
+      document.getElementById('open-positions').textContent = d.open_positions;
+
+      // Regime
+      const regimeColors = {
+        QUIET: 'text-blue-400', TRENDING_UP: 'text-green-400', TRENDING_DOWN: 'text-red-400',
+        VOLATILE: 'text-yellow-400', NEWS_DRIVEN: 'text-purple-400', DEAD: 'text-gray-500'
+      };
+      const regimeEl = document.getElementById('regime-name');
+      regimeEl.textContent = d.regime.name;
+      regimeEl.className = `text-lg font-bold ${regimeColors[d.regime.name] || 'text-gray-400'}`;
+      document.getElementById('regime-conf').textContent = `${(d.regime.confidence * 100).toFixed(0)}% confidence`;
+      document.getElementById('regime-aggression').textContent = `${d.regime.aggression.toFixed(2)}x`;
+      document.getElementById('regime-rec').textContent = `favored: ${d.regime.recommended.join(', ')}`;
+
+      // Strategy weights
+      const weightsEl = document.getElementById('strategy-weights');
+      const strategyEmoji = {
+        cycle_sniper: '⚡', negrisk_arb: '🛡️', mispricing: '🧠',
+        cross_correlation: '🔗', whale_consensus: '🐋', market_making: '💱'
+      };
+      weightsEl.innerHTML = d.weights.map(w => {
+        const pct = Math.min(100, w.weight * 66.67); // 1.0 = 66%, 1.5 = 100%
+        const statusColor = { hot: '#f59e0b', warm: '#60a5fa', cold: '#6b7280', frozen: '#ef4444' }[w.status] || '#60a5fa';
+        const statusEmoji = { hot: '🔥', warm: '', cold: '❄️', frozen: '🧊' }[w.status] || '';
+        return `
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-xs font-medium">${strategyEmoji[w.strategy] || '📊'} ${w.strategy.replace(/_/g, ' ')} ${statusEmoji}</span>
+              <span class="text-[10px] text-gray-500">${w.weight.toFixed(2)} · ${(w.win_rate * 100).toFixed(0)}% · ${w.trades}t</span>
+            </div>
+            <div class="h-1.5 bg-white/5 rounded-full overflow-hidden">
+              <div class="h-full rounded-full transition-all duration-500" style="width: ${pct}%; background: ${statusColor};"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Trades feed
+      const tradesEl = document.getElementById('trades-feed');
+      document.getElementById('trade-count').textContent = `${d.trades.length} recent`;
+      tradesEl.innerHTML = d.trades.length === 0 
+        ? '<p class="text-center text-gray-500 text-xs py-4">No trades yet</p>'
+        : d.trades.map(t => {
+          const icon = t.won ? '✅' : '❌';
+          const strategy = strategyEmoji[t.strategy] || '📊';
+          const pnlClass = t.pnl >= 0 ? 'text-green-400' : 'text-red-400';
+          const pnlSign = t.pnl >= 0 ? '+' : '';
+          const time = new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+          return `
+            <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+              <div class="flex items-center gap-2 flex-1 min-w-0">
+                <span>${icon}</span>
+                <span class="text-xs">${strategy}</span>
+                <span class="text-xs font-semibold ${t.direction === 'YES' ? 'text-green-400' : 'text-red-400'}">${t.direction}</span>
+                <span class="text-xs text-gray-400 truncate">${t.question.slice(0, 28)}...</span>
+              </div>
+              <div class="text-right ml-2">
+                <p class="text-xs font-semibold ${pnlClass}">${pnlSign}$${t.pnl.toFixed(2)}</p>
+                <p class="text-[9px] text-gray-500">${time}</p>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+      // Latest verdict
+      const verdictEl = document.getElementById('latest-verdict');
+      if (d.latest_verdict) {
+        const v = d.latest_verdict;
+        const verdictColor = { TAKE: 'text-green-400', PASS: 'text-gray-400', REVERSE: 'text-yellow-400' }[v.verdict] || 'text-gray-400';
+        verdictEl.innerHTML = `
+          <div class="space-y-2">
+            <p class="text-xs text-gray-300 font-medium line-clamp-2">${v.question}</p>
+            <div class="flex items-center gap-3 text-xs">
+              <span class="${verdictColor} font-bold">${v.verdict}</span>
+              <span class="text-gray-500">${v.direction}</span>
+              <span class="text-blue-400">agree ${(v.agreement * 100).toFixed(0)}%</span>
+              <span class="text-purple-400">edge ${(v.edge * 100).toFixed(1)}%</span>
+            </div>
+            <p class="text-[10px] text-gray-500 italic">crux: ${v.crux ? v.crux.slice(0, 120) : '—'}</p>
+          </div>
+        `;
+      } else {
+        verdictEl.innerHTML = '<p class="text-xs text-gray-500 text-center py-2">No council verdicts yet</p>';
+      }
+
+      // Hypothesis lab
+      document.getElementById('lab-total').textContent = `${d.lab.total} total`;
+      const hypEl = document.getElementById('hypotheses');
+      if (d.lab.top_edges.length === 0) {
+        hypEl.innerHTML = '<p class="text-center text-gray-500 text-xs py-2">Gathering evidence...</p>';
+      } else {
+        hypEl.innerHTML = d.lab.top_edges.map(e => `
+          <div class="flex items-center justify-between">
+            <span class="text-xs truncate flex-1">${e.name.replace(/_/g, ' ')}</span>
+            <div class="flex items-center gap-2 text-[10px]">
+              <span class="text-green-400 font-semibold">${(e.rate * 100).toFixed(0)}%</span>
+              <span class="text-gray-500">n=${e.trials}</span>
+              <span class="text-purple-400">p=${e.p.toFixed(3)}</span>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      // Genetics
+      document.getElementById('gen-active').textContent = d.genetics.active;
+      document.getElementById('gen-testing').textContent = d.genetics.testing;
+      document.getElementById('gen-archived').textContent = d.genetics.archived;
+      document.getElementById('gen-generations').textContent = d.genetics.generations;
+
+      // Calibration
+      document.getElementById('brier').textContent = d.calibration.brier.toFixed(3);
+      const biasEl = document.getElementById('cal-bias');
+      if (d.calibration.overconfident) {
+        biasEl.textContent = '⚠️ overconfident';
+        biasEl.className = 'text-[10px] mt-1 text-yellow-400';
+      } else if (d.calibration.underconfident) {
+        biasEl.textContent = '⚠️ underconfident';
+        biasEl.className = 'text-[10px] mt-1 text-yellow-400';
+      } else {
+        biasEl.textContent = '✓ well calibrated';
+        biasEl.className = 'text-[10px] mt-1 text-green-400';
+      }
+
+      // Evolution
+      document.getElementById('evo-cycles').textContent = d.evolution.cycles;
+      document.getElementById('evo-patterns').textContent = d.evolution.patterns;
+      document.getElementById('evo-prompts').textContent = d.evolution.prompt_evolutions;
+
+      // Uptime
+      const uptimeMin = Math.floor(d.uptime_seconds / 60);
+      const uptimeH = Math.floor(uptimeMin / 60);
+      const uptimeD = Math.floor(uptimeH / 24);
+      let uptimeStr = '';
+      if (uptimeD > 0) uptimeStr = `${uptimeD}d ${uptimeH % 24}h ${uptimeMin % 60}m`;
+      else if (uptimeH > 0) uptimeStr = `${uptimeH}h ${uptimeMin % 60}m`;
+      else uptimeStr = `${uptimeMin}m`;
+      document.getElementById('uptime').textContent = `uptime: ${uptimeStr}`;
+    }
+
+    async function toggleBot() {
+      try {
+        const res = await fetch('/api/toggle', { method: 'POST' });
+        const data = await res.json();
+        paused = data.paused;
+        document.getElementById('pause-btn').textContent = paused ? '▶ Resume' : '⏸ Pause';
+      } catch {}
+    }
+
+    function refresh() { fetchSnapshot(); }
+
+    // Initial fetch + poll every 10 seconds
+    fetchSnapshot();
+    setInterval(fetchSnapshot, 10000);
+
+    // Handle page visibility - pause polling when hidden to save battery
+    let pollInterval = 10000;
+    document.addEventListener('visibilitychange', () => {
+      pollInterval = document.hidden ? 60000 : 10000;
+    });
+  </script>
+</body>
+</html>
