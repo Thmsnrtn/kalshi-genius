@@ -262,7 +262,7 @@ async function main() {
           console.log(`  🎯 ${triggered.length} markets with alpha signals`);
         }
 
-        const liquid = cachedMarkets.filter((m) => m.volume >= config.MIN_MARKET_LIQUIDITY);
+        const liquid = cachedMarkets.filter((m) => m.yes_price > 0.01 && m.yes_price < 0.99);
         const toAnalyze = [
           ...liquid.filter((m) => triggered.some((t) => m.condition_id === t.market_id || m.question.slice(0, 30) === t.market_id.slice(0, 30))),
           ...liquid.filter((m) => !triggered.some((t) => m.condition_id === t.market_id)),

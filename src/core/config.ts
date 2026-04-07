@@ -46,7 +46,7 @@ export const config = {
   // ── Claude Analysis ──
   CLAUDE_SCAN_INTERVAL_MS: 180000,  // Every 3 minutes
   CLAUDE_MARKETS_PER_SCAN: 8,       // Analyze top 8 markets
-  MIN_MARKET_LIQUIDITY: 5000,
+  MIN_MARKET_LIQUIDITY: 0,  // Kalshi: filter by price presence, not volume
 
   // ── Kalshi ──
   KALSHI_ENV: (process.env.KALSHI_ENV ?? "demo") as "demo" | "production",
