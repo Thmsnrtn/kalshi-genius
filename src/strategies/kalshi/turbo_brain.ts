@@ -14,6 +14,7 @@ import { getPrice, detectCryptoSignal, detectCrossAssetCascade, predictSettlemen
 import { getOrderBookImbalance, getFundingBias, detectLiquidationCascade, getVPIN, getVWAP } from "../../feeds/binance_advanced.js";
 import { getCurrentRegime } from "../../evolution/regime_detector.js";
 import { getRecentTurboContext, getTurboStats } from "./turbo_tracker.js";
+import { analyzeTurboMarket, updateCycleOpens, computeRealizedVol, type VolRegime } from "../../core/turbo_probability.js";
 
 // ── Types ──
 
@@ -1532,7 +1533,13 @@ export function shouldExitTurboEarly(
 }
 
 // ═══════════════════════════════════════════════════════
-// MAIN ANALYSIS: Combine all signals into a single decision
+// MAIN ANALYSIS V7: Probability-model-first decision engine
+//
+// Architecture:
+// 1. Pre-checks (dedup, time-of-day, timing gate)
+// 2. PRIMARY: Black-Scholes probability model → fee-aware edge
+// 3. SECONDARY: Momentum, volume, correlation, flow → confidence adjustment
+// 4. SIZING: Quarter-Kelly from calibrated edge, adjusted by vol regime
 // ═══════════════════════════════════════════════════════
 
 export function analyzeTurboOpportunity(params: {
@@ -1549,13 +1556,12 @@ export function analyzeTurboOpportunity(params: {
   const { ticker, asset, kalshiYesPrice, kalshiNoPrice, minutesRemaining, isFreshOpen } = params;
   const kalshiYesBid = params.kalshiYesBid ?? 0;
   const kalshiNoBid = params.kalshiNoBid ?? 0;
-  const isUpMarket = params.isUpMarket ?? true; // default for "up" markets
+  const isUpMarket = params.isUpMarket ?? true;
   const symbol = asset === "BTC" ? "btcusdt" : asset === "ETH" ? "ethusdt"
     : asset === "SOL" ? "solusdt" : "xrpusdt";
 
-  // ── V5: Per-cycle dedup — only one entry per ticker per cycle ──
+  // ── Pre-check 1: Per-cycle dedup ──
   const now = Date.now();
-  // Clean stale entries
   for (const [t, ts] of cycleEntries) {
     if (now - ts > CYCLE_DEDUP_WINDOW) cycleEntries.delete(t);
   }
@@ -1563,373 +1569,269 @@ export function analyzeTurboOpportunity(params: {
     return { trade: false, skip_reason: `already_entered_this_cycle` };
   }
 
-  // ── V2 #11: Time-of-day filter — skip hours with proven poor performance ──
+  // ── Pre-check 2: Time-of-day filter ──
   const hourPerf = getHourWinRate();
   if (hourPerf.shouldSkip) {
     return { trade: false, skip_reason: `bad_hour (${(hourPerf.rate * 100).toFixed(0)}% WR over ${hourPerf.trades} trades this hour)` };
   }
 
-  // ── Timing gate (#5): Only trade in first ~7 minutes of a cycle ──
+  // ── Pre-check 3: Timing gate — only trade in first ~7 minutes ──
   if (isFreshOpen && minutesRemaining < 8) {
     return { trade: false, skip_reason: "past_optimal_entry_window" };
+  }
+
+  // ── Pre-check 4: Micro-timing ──
+  const minuteEdge = getMinuteEdge(minutesRemaining);
+  if (minuteEdge.shouldDelay) {
+    return { trade: false, skip_reason: `bad_entry_minute (delaying to better window)` };
   }
 
   const snap = getPrice(symbol);
   if (!snap) return { trade: false, skip_reason: "no_price_data" };
 
-  const regime = getCurrentRegime();
-  const regimeName = regime?.regime ?? "QUIET";
+  // ── Pre-check 5: Liquidity ──
+  const liquidity = checkKalshiLiquidity(kalshiYesBid, kalshiYesPrice, kalshiNoBid, kalshiNoPrice, "YES");
+  if (!liquidity.liquid) {
+    return { trade: false, skip_reason: `illiquid (spread: ${liquidity.spread_cents.toFixed(0)}¢, exit_cost: ${(liquidity.exit_cost_pct * 100).toFixed(0)}%)` };
+  }
 
-  // ── Signal scoring (each signal contributes weighted amount to composite) ──
-  let compositeScore = 0;
-  let direction: "YES" | "NO" | null = null;
+  // ══════════════════════════════════════════════════════
+  // PRIMARY SIGNAL: Black-Scholes probability model + mispricing
+  // ══════════════════════════════════════════════════════
+  updateCycleOpens(); // Ensure cycle open prices are tracked
+
+  const turboAnalysis = analyzeTurboMarket({
+    symbol,
+    minutesRemaining,
+    kalshiYesPrice,
+    kalshiNoPrice,
+    isUpMarket,
+    bankroll: lastKnownBankroll,
+  });
+
   const sources: string[] = [];
   const reasons: string[] = [];
 
-  // Signal 1: Momentum direction
+  // The model gives us direction and edge
+  let direction = turboAnalysis.direction;
+  let netEdge = turboAnalysis.net_edge;
+  let modelProb = turboAnalysis.mispricing.model_prob;
+
+  if (turboAnalysis.prob) {
+    sources.push(`model(${(modelProb * 100).toFixed(0)}%)`);
+    reasons.push(`P(${direction})=${(modelProb * 100).toFixed(1)}% z=${turboAnalysis.prob.z_score.toFixed(2)} dist=${turboAnalysis.prob.distance_pct.toFixed(3)}%`);
+  }
+
+  reasons.push(`Vol: ${(turboAnalysis.vol.vol_15m * 100).toFixed(2)}% [${turboAnalysis.vol.regime}]`);
+  sources.push(`vol_${turboAnalysis.vol.regime.toLowerCase()}`);
+
+  // ══════════════════════════════════════════════════════
+  // SECONDARY SIGNALS: Adjust edge estimate ±
+  // These can push a borderline trade into "go" territory or pull it back
+  // Max total secondary adjustment: ±5% edge
+  // ══════════════════════════════════════════════════════
+  let secondaryAdj = 0;
+
+  // S1: Momentum confirmation — does Binance momentum agree with our direction?
   const c5 = snap.change5s ?? 0;
   const c30 = snap.change30s ?? 0;
   const c60 = snap.change60s ?? 0;
-  const primaryDir = c30 > 0 ? "YES" : c30 < 0 ? "NO" : null;
-
-  if (!primaryDir || Math.abs(c30) < 0.003) {
-    return { trade: false, skip_reason: "no_momentum" };
-  }
-  direction = primaryDir;
-
-  // #1: Mean reversion check — skip spikes
   const moveType = analyzeMoveType(snap);
+
   if (moveType.type === "spike") {
-    // V2 #17: Unless opponent modeling shows early overshoot pattern (fade it)
-    const opponent = getOpponentPattern(asset);
-    if (opponent.early_overshoot && minutesRemaining >= 12) {
-      // Don't skip — spike detection + overshoot pattern = fade opportunity
-      compositeScore += 0.10;
-      sources.push("fade_overshoot");
-      reasons.push(`Spike detected but Kalshi historically overshoots early — fading`);
+    secondaryAdj -= 0.02;
+    reasons.push("Spike detected — momentum discount");
+  } else if (moveType.type === "trend") {
+    const trendDir = c30 > 0 ? "YES" : "NO";
+    if (trendDir === direction) {
+      secondaryAdj += 0.015 * getSignalWeight("sustained_trend");
+      sources.push("trend_confirms");
     } else {
-      return { trade: false, skip_reason: `spike_detected (reversal_risk: ${(moveType.reversal_risk * 100).toFixed(0)}%)` };
+      secondaryAdj -= 0.015;
+      reasons.push("Trend opposes model direction");
     }
   }
-  if (moveType.type === "trend") {
-    const w = getSignalWeight("sustained_trend"); // V2 #16: dynamic weight
-    compositeScore += 0.25 * w;
-    sources.push("sustained_trend");
-    reasons.push(`Sustained ${direction} trend (5s/30s/60s aligned)`);
-  } else if (moveType.type === "flat") {
-    compositeScore += 0.10;
-  }
 
-  // Timeframe agreement bonus
+  // Timeframe agreement
   const allAgree = (c5 > 0 && c30 > 0 && c60 > 0) || (c5 < 0 && c30 < 0 && c60 < 0);
-  if (allAgree) {
-    compositeScore += 0.15 * getSignalWeight("tf_agreement");
-    sources.push("tf_agreement");
+  const momDir = c30 > 0 ? "YES" : "NO";
+  if (allAgree && momDir === direction) {
+    secondaryAdj += 0.01 * getSignalWeight("tf_agreement");
+    sources.push("tf_agree");
   }
 
-  // #2: BTC lead-lag for alts
+  // S2: BTC lead-lag for alts
   const btcLead = getBtcLeadSignal(asset);
   if (btcLead.signal) {
     if (btcLead.signal === direction) {
-      const w = getSignalWeight("btc_lead");
-      compositeScore += 0.20 * btcLead.confidence * w;
-      sources.push(`btc_lead(gap:${(btcLead.lag_pct * 100).toFixed(2)}%)`);
-      reasons.push(`BTC leading ${asset} ${direction} (${(btcLead.lag_pct * 100).toFixed(2)}% gap)`);
+      secondaryAdj += 0.015 * btcLead.confidence * getSignalWeight("btc_lead");
+      sources.push(`btc_lead(${(btcLead.lag_pct * 100).toFixed(2)}%)`);
     } else {
-      compositeScore -= 0.15;
-      reasons.push(`BTC leading opposite direction — caution`);
+      secondaryAdj -= 0.01;
     }
   }
 
-  // #3: Volume confirmation
+  // S3: Volume confirmation (OBI + VPIN)
   const volume = getVolumeConfirmation(symbol, direction);
   if (volume.confirmed) {
-    const w = getSignalWeight("volume");
-    compositeScore += 0.20 * volume.strength * w;
+    secondaryAdj += 0.01 * volume.strength * getSignalWeight("volume");
     sources.push(`volume(${(volume.strength * 100).toFixed(0)}%)`);
-    reasons.push(`Volume confirms ${direction} (OBI/VPIN strength: ${(volume.strength * 100).toFixed(0)}%)`);
-  } else {
-    compositeScore -= 0.05;
   }
 
-  // #4: Kalshi price divergence
-  const moveStrength = Math.abs(c30);
-  const divergence = getKalshiDivergence(kalshiYesPrice, direction, moveStrength);
-  if (divergence.divergent) {
-    compositeScore += 0.20 * getSignalWeight("kalshi_div");
-    sources.push(`kalshi_div(${(divergence.edge * 100).toFixed(0)}¢)`);
-    reasons.push(`Kalshi mispriced by ${(divergence.edge * 100).toFixed(0)}¢ vs Binance`);
-  }
-
-  // VWAP signal: price relative to VWAP
-  const vwap = getVWAP(symbol);
-  if (vwap) {
-    const vwapAgrees = (direction === "YES" && vwap.signal === "oversold") ||
-                       (direction === "NO" && vwap.signal === "overbought");
-    if (vwapAgrees) {
-      compositeScore += 0.10;
-      sources.push("vwap_edge");
-      reasons.push(`VWAP ${vwap.signal}: mean reversion supports ${direction}`);
-    }
-    const vwapContra = (direction === "YES" && vwap.signal === "overbought") ||
-                       (direction === "NO" && vwap.signal === "oversold");
-    if (vwapContra) {
-      compositeScore -= 0.10;
-    }
-  }
-
-  // Funding rate bias
+  // S4: Funding rate bias
   const funding = getFundingBias(symbol);
   if (funding) {
     const fundingAgrees = (direction === "YES" && funding.bias === "bullish") ||
                           (direction === "NO" && funding.bias === "bearish");
     if (fundingAgrees) {
-      compositeScore += 0.10;
+      secondaryAdj += 0.005;
       sources.push("funding");
     }
   }
 
-  // Liquidation cascade — huge signal if active
+  // S5: Liquidation cascade — large signal, can override
   const liq = detectLiquidationCascade(symbol);
   if (liq && liq.active && liq.intensity > 0.5) {
     const liqDir = liq.direction === "short_squeeze" ? "YES" : "NO";
     if (liqDir === direction) {
-      compositeScore += 0.25;
+      secondaryAdj += 0.03;
       sources.push(`liq_cascade(${liq.direction})`);
-      reasons.push(`Active ${liq.direction} cascade (intensity: ${(liq.intensity * 100).toFixed(0)}%)`);
+      reasons.push(`Active ${liq.direction} cascade`);
     } else {
       return { trade: false, skip_reason: `liq_cascade_against (${liq.direction})` };
     }
   }
 
-  // ── V2 #9: Strike price awareness ──
-  const strike = getStrikeDistance(symbol, direction === "YES");
-  if (strike.favorable && strike.probability_boost > 0) {
-    compositeScore += strike.probability_boost * getSignalWeight("strike_distance");
-    sources.push(`strike(${(strike.distance_pct * 100).toFixed(2)}%)`);
-    reasons.push(`Already ${(Math.abs(strike.distance_pct) * 100).toFixed(2)}% ${strike.favorable ? "favorable" : "unfavorable"} from open`);
-  } else if (!strike.favorable && Math.abs(strike.distance_pct) > 0.002) {
-    // Price moved against our direction from open — penalty
-    compositeScore -= 0.08;
-  }
-
-  // ── V2 #10: Settlement probability model ──
-  const settlementProb = getSettlementProbability(symbol, direction === "YES", minutesRemaining);
-  if (settlementProb.probability > 0.60) {
-    const probBoost = (settlementProb.probability - 0.50) * 0.8; // Max ~0.28 boost
-    compositeScore += probBoost * getSignalWeight("settlement_model");
-    sources.push(`settle_prob(${(settlementProb.probability * 100).toFixed(0)}%)`);
-    reasons.push(`Settlement model: ${(settlementProb.probability * 100).toFixed(0)}% ${direction}`);
-  } else if (settlementProb.probability < 0.40) {
-    // Model says we're likely wrong
-    compositeScore -= 0.15;
-    reasons.push(`Settlement model bearish: ${(settlementProb.probability * 100).toFixed(0)}%`);
-  }
-
-  // ── V2 #13: Kalshi spread/liquidity check ──
-  const liquidity = checkKalshiLiquidity(kalshiYesBid, kalshiYesPrice, kalshiNoBid, kalshiNoPrice, direction);
-  if (!liquidity.liquid) {
-    return { trade: false, skip_reason: `illiquid (spread: ${liquidity.spread_cents.toFixed(0)}¢, exit_cost: ${(liquidity.exit_cost_pct * 100).toFixed(0)}%)` };
-  }
-  if (liquidity.exit_cost_pct > 0.20) {
-    compositeScore -= 0.10; // High exit cost eats into edge
-    reasons.push(`Wide spread: ${liquidity.spread_cents.toFixed(0)}¢`);
-  }
-
-  // ── V2 #14: Multi-asset correlation ──
+  // S6: Multi-asset correlation
   const corrSignal = getCorrelationSignal(asset, direction);
   if (corrSignal.agrees && corrSignal.strength > 0.6) {
-    compositeScore += 0.08 * getSignalWeight("correlation");
+    secondaryAdj += 0.005;
     sources.push("corr_confirms");
   } else if (!corrSignal.agrees && corrSignal.divergent_asset) {
-    compositeScore -= 0.08;
-    reasons.push(`${corrSignal.divergent_asset} diverging (usually correlated)`);
+    secondaryAdj -= 0.005;
   }
 
-  // ── V2 #15: Volatility-adjusted strike distance ──
-  const volAdj = getVolAdjustedEdge(symbol, direction === "YES", minutesRemaining);
-  if (volAdj.high_vol_caution) {
-    compositeScore *= 0.75; // High vol = reduce confidence in all signals
-    reasons.push("High volatility — all signals discounted");
-  }
-  if (volAdj.vol_adjusted_prob > 0.60) {
-    compositeScore += 0.08;
-    sources.push(`vol_adj(${(volAdj.vol_adjusted_prob * 100).toFixed(0)}%)`);
-  }
-
-  // ── V2 #18: Enhanced cross-cycle momentum ──
+  // S7: Cross-cycle momentum
   const crossCycle = getCrossCycleMomentum(asset);
-  if (crossCycle.should_fade && direction === getCyclePattern(asset).streak_direction) {
-    compositeScore -= 0.12;
-    reasons.push(`${crossCycle.cycles_same_direction}-cycle streak, fading recommended`);
-  } else if (crossCycle.trend_strength > 0.6 && direction === getCyclePattern(asset).streak_direction) {
-    compositeScore += 0.08;
+  const cyclePattern = getCyclePattern(asset);
+  if (crossCycle.should_fade && direction === cyclePattern.streak_direction) {
+    secondaryAdj -= 0.01;
+    reasons.push(`${crossCycle.cycles_same_direction}-cycle streak — fade pressure`);
+  } else if (crossCycle.trend_strength > 0.6 && direction === cyclePattern.streak_direction) {
+    secondaryAdj += 0.005;
     sources.push(`trend_run(${crossCycle.cycles_same_direction})`);
   }
 
-  // #6: Multi-cycle memory (original, now enhanced by #18)
-  const cyclePattern = getCyclePattern(asset);
-  if (cyclePattern.streak_direction && cyclePattern.streak_length >= 4) {
-    if (direction === cyclePattern.streak_direction) {
-      compositeScore -= 0.10 * (cyclePattern.reversion_probability - 0.5);
-      reasons.push(`${cyclePattern.streak_length}-cycle ${cyclePattern.streak_direction} streak — reversion risk`);
-    } else {
-      compositeScore += 0.05;
-      sources.push("streak_fade");
-    }
-  }
-  if (cyclePattern.trend_day && direction === cyclePattern.streak_direction) {
-    compositeScore += 0.05;
-    sources.push("trend_day");
-  }
-
-  // ── V4 #5: Confidence decay — weight this scan against recent scans ──
-  recordScanResult(ticker, direction, compositeScore);
-  const decayScore = getDecayWeightedScore(ticker, direction, compositeScore);
-  if (decayScore > compositeScore + 0.02) {
-    // Multiple scans confirm this direction — boost
-    compositeScore = decayScore;
-    sources.push("multi_scan_confirm");
-  } else if (decayScore < compositeScore - 0.05) {
-    // Signal is flickering — reduce confidence
-    compositeScore = (compositeScore + decayScore) / 2;
-  }
-
-  // ── V4 #6: Pre-market edge ──
-  const preEdge = getPreMarketEdge(asset, direction);
-  if (preEdge > 0) {
-    compositeScore += preEdge;
-    sources.push(`pre_market(+${(preEdge * 100).toFixed(0)})`);
-  } else if (preEdge < 0) {
-    compositeScore += preEdge; // Negative = penalty
-  }
-
-  // ── V4 #4: Kalshi order flow ──
+  // S8: Kalshi order flow
   const flow = getKalshiFlowSignal(asset);
   if (flow.flow_direction === direction && flow.strength > 0.4) {
-    compositeScore += 0.08 * flow.strength;
-    sources.push(`kalshi_flow(${flow.flow_direction})`);
-    reasons.push(`Kalshi order flow: ${flow.buying_pressure ? "buying" : "selling"} pressure`);
+    secondaryAdj += 0.008 * flow.strength;
+    sources.push(`flow(${flow.flow_direction})`);
   } else if (flow.flow_direction && flow.flow_direction !== direction && flow.strength > 0.5) {
-    compositeScore -= 0.06;
-    reasons.push("Kalshi flow opposes our direction");
+    secondaryAdj -= 0.005;
   }
 
-  // ── V4 #11: Micro-timing ──
-  const minuteEdge = getMinuteEdge(minutesRemaining);
-  if (minuteEdge.shouldDelay) {
-    return { trade: false, skip_reason: `bad_entry_minute (delaying to better window)` };
-  }
-  compositeScore += minuteEdge.edge;
-
-  // ── V4 #12: Contrarian conviction ──
-  const contrarian = getContrarianBoost(kalshiYesPrice, direction, settlementProb.probability);
-  if (contrarian.isContrarian) {
-    compositeScore += contrarian.boost;
-    sources.push(`contrarian(${(contrarian.sizeBoost).toFixed(1)}x)`);
-    reasons.push(`Model disagrees with Kalshi by ${((settlementProb.probability - (direction === "YES" ? kalshiYesPrice : 1 - kalshiYesPrice)) * 100).toFixed(0)}%`);
+  // S9: Pre-market edge
+  const preEdge = getPreMarketEdge(asset, direction);
+  if (preEdge !== 0) {
+    secondaryAdj += Math.max(-0.01, Math.min(0.01, preEdge * 0.5));
   }
 
-  // ── V4 #7: Regime-specific playbook ──
-  const playbook = getRegimePlaybook(regimeName);
-  compositeScore += playbook.minScore;
-  compositeScore *= playbook.sizeScale > 1 ? 1 + (playbook.sizeScale - 1) * 0.3 : 1; // Partial regime scaling on score
-  if (playbook.preferDirection && direction === playbook.preferDirection) {
-    compositeScore += 0.03; // Small directional bias
+  // S10: Minute-level edge from historical performance
+  secondaryAdj += minuteEdge.edge * 0.5;
+
+  // Clamp secondary adjustment to ±5%
+  secondaryAdj = Math.max(-0.05, Math.min(0.05, secondaryAdj));
+
+  // ── Apply secondary adjustment to net edge ──
+  const adjustedEdge = netEdge + secondaryAdj;
+
+  // ── Confidence decay: weight against recent scans ──
+  const compositeScore = adjustedEdge * 10; // Scale edge to composite score range for compatibility
+  recordScanResult(ticker, direction, compositeScore);
+  const decayScore = getDecayWeightedScore(ticker, direction, compositeScore);
+  const signalStability = Math.abs(decayScore - compositeScore) < 0.05 ? 1.0 : 0.85;
+
+  // ══════════════════════════════════════════════════════
+  // DECISION GATE
+  // ══════════════════════════════════════════════════════
+  const minEdge = turboAnalysis.min_edge_required;
+  const maxPrice = turboAnalysis.max_contract_price;
+
+  // Use model's skip reason if it has one
+  if (turboAnalysis.skip_reason && adjustedEdge < minEdge) {
+    return { trade: false, skip_reason: turboAnalysis.skip_reason };
   }
 
-  // ── V4 #9: Position correlation guard ──
-  const corrPenalty = getCorrelationPenalty(asset, direction);
-  // Don't penalize score, but track for size adjustment later
-
-  // ── GROWTH ENGINE: Decision gate ──
-  const { threshold: TRADE_THRESHOLD, exploreThreshold: EXPLORE_THRESHOLD } = getAdaptiveThreshold();
-  const isExplore = compositeScore >= EXPLORE_THRESHOLD && compositeScore < TRADE_THRESHOLD;
-
-  if (compositeScore < EXPLORE_THRESHOLD) {
+  // Check adjusted edge against vol-regime-aware minimum
+  const isExplore = adjustedEdge >= minEdge * 0.6 && adjustedEdge < minEdge;
+  if (adjustedEdge < minEdge * 0.6) {
     return {
       trade: false,
-      skip_reason: `score_too_low (${compositeScore.toFixed(2)} < ${EXPLORE_THRESHOLD.toFixed(2)}/${TRADE_THRESHOLD.toFixed(2)})`,
+      skip_reason: `edge_too_low (${(adjustedEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}% [${turboAnalysis.vol.regime}])`,
     };
   }
 
-  // ── Price selection with regime-aware cap ──
+  // Price checks
   const price = direction === "YES" ? kalshiYesPrice : kalshiNoPrice;
-  const maxPrice = playbook.maxPrice;
-
   if (price > maxPrice) {
-    return { trade: false, skip_reason: `price_too_high (${(price * 100).toFixed(0)}¢ > ${(maxPrice * 100).toFixed(0)}¢ [${regimeName}])` };
+    return { trade: false, skip_reason: `price_too_high (${(price * 100).toFixed(0)}¢ > ${(maxPrice * 100).toFixed(0)}¢ [${turboAnalysis.vol.regime}])` };
   }
-  // V5: Data shows <25¢ entries are 0% WR — Kalshi is correctly pricing these cheap
-  if (price < 0.25) {
-    return { trade: false, skip_reason: `price_too_low (${(price * 100).toFixed(0)}¢ < 25¢ floor)` };
+  if (price < 0.20) {
+    return { trade: false, skip_reason: `price_too_low (${(price * 100).toFixed(0)}¢ — correctly priced cheap)` };
   }
 
-  // ── NEVER REPEAT LOSSES: Block patterns we've lost on 2+ times recently ──
+  // ── Loss pattern blocking ──
   const lossCheck = isRepeatedLossPattern(asset, direction, price);
   if (lossCheck.isRepeat && !isExplore) {
-    // Only block full-conviction trades, not explore probes (we need to retest sometimes)
     return { trade: false, skip_reason: `loss_pattern_blocked (${lossCheck.lossCount}x ${asset} ${direction} at ${getPriceRange(price)})` };
   }
 
-  // ── V5: Calibrated confidence — anchored to actual brain win rate ──
-  // Old formula (0.40 + score*0.5) produced >75% confidence at 25% WR = garbage
-  // New: confidence = brain_base_rate + score_bonus, capped conservatively
-  // The brain WR IS our actual P(win), score adjusts it marginally
-  const brainBaseRate = getBrainWinRate(); // actual historical WR (default 0.50)
-  const scoreBonus = Math.min(0.15, compositeScore * 0.25); // score adds up to 15% max
-  const settlementBoost = settlementProb.probability > 0.55 ? (settlementProb.probability - 0.50) * 0.15 : 0;
-  const confidence = Math.min(0.70, brainBaseRate + scoreBonus + settlementBoost);
-  const sizeMultiplier = getAsymmetricSizeMultiplier(price, confidence);
+  // ══════════════════════════════════════════════════════
+  // SIZING: Model-driven Kelly with adjustments
+  // ══════════════════════════════════════════════════════
+
+  // Confidence: model probability is the real P(win), calibrated by brain WR
+  const brainBaseRate = getBrainWinRate();
+  // Blend model probability with brain WR: 70% model, 30% empirical
+  const blendedProb = modelProb * 0.7 + brainBaseRate * 0.3;
+  const confidence = Math.min(0.75, blendedProb);
+
+  // Kelly from the model's edge calculation
+  const fullKelly = adjustedEdge > 0 ? adjustedEdge / (1 - price) : 0;
+  // Scale by vol regime + brain calibration
+  const volRegimeScale = turboAnalysis.vol.regime === "LOW" ? 0.35
+    : turboAnalysis.vol.regime === "NORMAL" ? 0.25
+    : turboAnalysis.vol.regime === "HIGH" ? 0.15
+    : 0.10;
+  let sizeMultiplier = fullKelly * volRegimeScale * 10; // Scale to multiplier range
 
   if (sizeMultiplier <= 0) {
     return { trade: false, skip_reason: "negative_kelly" };
   }
 
-  // Opponent modeling: reduce size if Kalshi historically overshoots early
-  const opponent = getOpponentPattern(asset);
-  const opponentAdj = opponent.early_overshoot && minutesRemaining >= 11 ? 0.7 : 1.0;
-
-  // Exploration trades: 50% normal size (enough to learn, controlled risk)
+  // Adjustments
+  const corrPenalty = getCorrelationPenalty(asset, direction);
+  const compoundMult = getCompoundingMultiplier();
+  const growthMult = getGrowthSizingMultiplier();
   const explorePenalty = isExplore ? 0.50 : 1.0;
-
-  // Repeated loss pattern on explore: cut to 25% (testing if pattern has changed)
   const lossPatternAdj = lossCheck.isRepeat ? 0.25 : 1.0;
-
-  // Mark last brain trade time + reset cycle counter
-  lastBrainTradeTime = Date.now();
-  cyclesSinceLastTrade = 0;
-
-  // V5: Register this ticker to prevent re-entry this cycle
-  cycleEntries.set(ticker, Date.now());
-
-  // V4 #12: Contrarian conviction → size boost
-  const contrarianSizeBoost = contrarian.isContrarian ? contrarian.sizeBoost : 1.0;
-
-  // V4 #9: Correlation penalty on size (not score)
   const corrSizeAdj = 1.0 - corrPenalty;
 
-  // V4 #10: Streak escalation
-  const streakMult = getStreakExitMultiplier();
+  const finalSizeMult = sizeMultiplier * compoundMult * growthMult * explorePenalty
+    * lossPatternAdj * corrSizeAdj * signalStability;
 
-  // V4 #7: Regime size scaling
-  const regimeSizeScale = playbook.sizeScale;
+  // Mark last brain trade time + register cycle entry
+  lastBrainTradeTime = Date.now();
+  cyclesSinceLastTrade = 0;
+  cycleEntries.set(ticker, Date.now());
 
-  // V5: Bankroll-aware compounding multiplier (was dead code, now active)
-  const compoundMult = getCompoundingMultiplier();
-
-  // V6: Growth-target-aware sizing — push harder when behind target, lock in when ahead
-  const growthMult = getGrowthSizingMultiplier();
-
-  const finalSizeMult = sizeMultiplier * opponentAdj * explorePenalty * lossPatternAdj
-    * contrarianSizeBoost * corrSizeAdj * regimeSizeScale * compoundMult * growthMult;
-
-  const label = isExplore
-    ? (lossCheck.isRepeat ? "[RETEST] " : "[EXPLORE] ")
-    : contrarian.isContrarian ? "[CONTRARIAN] " : "";
-
-  // V4 #1: Calculate smart exit targets for this trade
+  // Calculate exit targets
   const exitTargets = calculateExitTargets(direction, price * 100, confidence, compositeScore, asset, minutesRemaining);
+
+  const label = isExplore ? "[EXPLORE] " : "";
+  reasons.push(`Net edge: ${(adjustedEdge * 100).toFixed(1)}% (model ${(netEdge * 100).toFixed(1)}% + secondary ${(secondaryAdj * 100).toFixed(1)}%)`);
+  reasons.push(exitTargets.reason);
 
   return {
     trade: true,
@@ -1940,8 +1842,8 @@ export function analyzeTurboOpportunity(params: {
       direction,
       price,
       confidence: isExplore ? confidence * 0.85 : confidence,
-      size_multiplier: Math.max(0.2, Math.min(4.0, finalSizeMult)),
-      reasoning: label + reasons.join(" | ") + ` | ${exitTargets.reason}`,
+      size_multiplier: Math.max(0.2, Math.min(3.0, finalSizeMult)),
+      reasoning: label + reasons.join(" | "),
       signal_sources: sources,
       score: compositeScore,
     },

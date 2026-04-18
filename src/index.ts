@@ -76,6 +76,9 @@ import { startAdvancedFeeds, getOrderBookImbalance, getFundingBias, detectLiquid
 // GENIUS SIGNALS (Regime, Stale Price, Confluence, Time Profiling, Circuit Breaker, Backtester, Adaptive, Correlation)
 import { classifyRegime, detectStalePrice, scoreConfluence, recordTimeProfile, getTimeAdvice, canTradeCircuitBreaker, recordTradeResult, correlationDiscount, recordSignalOutcome, getOptimalParameters } from "./core/genius_signals.js";
 
+// TURBO PROBABILITY MODEL (Phase 4: proper Black-Scholes + mispricing scanner)
+import { updateCycleOpens } from "./core/turbo_probability.js";
+
 // SMART EXECUTION (Order Routing, Partial Scaling)
 // ARCHIVED: import { getOrderStrategy, createScaledEntry, checkScaleOut, recordFillStats } from "./core/smart_execution.js";
 
@@ -383,6 +386,10 @@ async function main() {
   startPriceFeed();
   startAdvancedFeeds();
   await sleep(3000);
+
+  // Track cycle open prices every 10s for the probability model
+  setInterval(updateCycleOpens, 10_000);
+  updateCycleOpens(); // immediate first capture
 
   // Cache active Kalshi markets (events + turbo crypto series)
   const refreshMarkets = async () => {
