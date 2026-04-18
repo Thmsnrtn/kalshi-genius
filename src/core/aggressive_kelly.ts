@@ -101,8 +101,23 @@ export function aggressiveKelly(params: {
     };
   }
 
-  // Raw Kelly for binary markets: edge / (1 - price)
-  const raw_kelly = edge / (1 - price);
+  // Fee-adjusted edge: subtract round-trip fee cost from raw edge
+  // This prevents the bot from taking trades where fees eat the edge
+  const feeAdjustedEdge = edge - config.KALSHI_FEE_ROUND_TRIP_PCT;
+  if (feeAdjustedEdge <= 0) {
+    return {
+      raw_kelly: 0,
+      adjusted_kelly: 0,
+      bet_size_usd: 0,
+      bet_size_pct: 0,
+      contracts: 0,
+      confidence_boost: 0,
+      reasoning: `Edge ${(edge * 100).toFixed(1)}% eaten by fees (${(config.KALSHI_FEE_ROUND_TRIP_PCT * 100).toFixed(0)}% round-trip)`,
+    };
+  }
+
+  // Raw Kelly for binary markets: fee-adjusted edge / (1 - price)
+  const raw_kelly = feeAdjustedEdge / (1 - price);
 
   // Apply multipliers
   const bankrollMult = getBankrollMultiplier(bankroll);
@@ -131,10 +146,18 @@ export function aggressiveKelly(params: {
   // Compute dollar bet size
   let bet_size_usd = bankroll * adjusted_kelly;
 
-  // Floor at $0.50 minimum bet (Kalshi minimum)
+  // Minimum viable trade: if Kelly says bet less than $0.50, skip
+  // (rounding UP to minimum is anti-Kelly — it means the edge doesn't justify $0.50)
   if (bet_size_usd > 0 && bet_size_usd < 0.50) {
-    bet_size_usd = 0.50;
-    adjusted_kelly = bet_size_usd / bankroll;
+    return {
+      raw_kelly,
+      adjusted_kelly,
+      bet_size_usd: 0,
+      bet_size_pct: 0,
+      contracts: 0,
+      confidence_boost,
+      reasoning: `Kelly says $${bet_size_usd.toFixed(2)} but minimum bet is $0.50 — skipping`,
+    };
   }
 
   // If bankroll is too small even for the minimum bet, skip

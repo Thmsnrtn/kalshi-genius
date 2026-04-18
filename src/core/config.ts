@@ -45,6 +45,12 @@ export const config = {
   // ── Trading Mode ──
   TURBO_ONLY_MODE: true,             // Only trade 15-min crypto turbo markets (KXBTC15M, KXETH15M, KXSOL15M, KXXRP15M)
 
+  // ── Fees (Kalshi) ──
+  // Round-trip fee as fraction of contract value (buy + sell/settle)
+  // Kalshi: maker=free, taker≈7¢/contract, settlement=1¢
+  // Conservative estimate for mixed maker/taker: ~3% of contract value round-trip
+  KALSHI_FEE_ROUND_TRIP_PCT: 0.03,
+
   // ── Risk (hard limits) ──
   ABSOLUTE_MAX_SINGLE_TRADE: 0.30,   // Up from 0.15 — $25 needs concentration
   DAILY_LOSS_LIMIT_PCT: 0.25,        // Stop after 25% daily loss
