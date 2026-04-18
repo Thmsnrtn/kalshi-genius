@@ -3,7 +3,9 @@
 import { config } from "./config.js";
 import { getDb, getOpenPositions, updatePositionPrice, closePosition } from "./db.js";
 import { KalshiClient } from "../exchanges/kalshi/kalshi_client.js";
-import { getExitPlan, markTierExecuted } from "../velocity/velocity_engine.js";
+// ARCHIVED: import { getExitPlan, markTierExecuted } from "../velocity/velocity_engine.js";
+const getExitPlan = (_id: string): any => null;
+const markTierExecuted = (_id: string, _tier: number, _price?: number) => {};
 
 const CHECK_POSITIONS_INTERVAL_MS: number = config.CHECK_POSITIONS_INTERVAL_MS;
 const STOP_LOSS_PCT: number = config.STOP_LOSS_PCT;

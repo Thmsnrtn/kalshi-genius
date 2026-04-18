@@ -17,10 +17,15 @@ import { getGeneticsReport } from "../genius/strategy_genetics.js";
 import { getCalibrationReport } from "../genius/calibration_engine.js";
 import { getGeniusState } from "../genius/genius_orchestrator.js";
 import { config, getPhaseParams } from "../core/config.js";
-import { getLiquidityState } from "../liquidity/liquidity_orchestrator.js";
-import { confirmWithdrawal, getWithdrawalState } from "../compound/compound_engine.js";
-import { getCompoundState } from "../compound/compound_engine.js";
-import { getVelocityState } from "../velocity/velocity_orchestrator.js";
+// ARCHIVED: import { getLiquidityState } from "../liquidity/liquidity_orchestrator.js";
+// ARCHIVED: import { confirmWithdrawal, getWithdrawalState } from "../compound/compound_engine.js";
+// ARCHIVED: import { getCompoundState } from "../compound/compound_engine.js";
+// ARCHIVED: import { getVelocityState } from "../velocity/velocity_orchestrator.js";
+const getLiquidityState = () => ({});
+const getCompoundState = () => ({});
+const getVelocityState = () => ({});
+const getWithdrawalState = () => ({});
+const confirmWithdrawal = (_a: number) => ({ success: false, reason: "archived" });
 import { getStrategyTelemetry, getCouncilTelemetry } from "../core/telemetry.js";
 import { snoozeDailyLoss, unsnoozeDailyLoss, isDailyLossSnoozed } from "../core/risk.js";
 import { getTurboStats, getRecentTurboContext } from "../strategies/kalshi/turbo_tracker.js";
@@ -28,8 +33,12 @@ import { getGrowthTargetState } from "../strategies/kalshi/turbo_brain.js";
 import { getAllPrices, detectCryptoSignal, detectCrossAssetCascade, predictSettlement, getPriceHistoryRaw } from "../feeds/binance.js";
 import { getOrderBookImbalance, getFundingBias, detectLiquidationCascade, getVWAP, getVPIN } from "../feeds/binance_advanced.js";
 import { classifyRegime as geniusClassifyRegime, scoreConfluence, getTimeAdvice, getAllTimeProfiles, canTradeCircuitBreaker, getCircuitBreakerState, getOptimalParameters, correlationDiscount } from "../core/genius_signals.js";
-import { getTaxSummary, getOpenLots, getRecentLots } from "../core/tax_tracker.js";
-import { getFillStats } from "../core/smart_execution.js";
+// ARCHIVED: import { getTaxSummary, getOpenLots, getRecentLots } from "../core/tax_tracker.js";
+// ARCHIVED: import { getFillStats } from "../core/smart_execution.js";
+const getTaxSummary = () => ({});
+const getOpenLots = () => [];
+const getRecentLots = () => [];
+const getFillStats = () => ({});
 import Anthropic from "@anthropic-ai/sdk";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -852,8 +861,7 @@ BEHAVIOR:
                     break;
                   }
                   case "get_withdrawal_status": {
-                    const ws = getWithdrawalState();
-                    result = `Nest egg: $${ws.nest_egg.toFixed(2)}\nTotal withdrawn: $${ws.total_withdrawn.toFixed(2)}\nMilestones hit: ${ws.milestones_hit.length > 0 ? ws.milestones_hit.map(m => `$${m}`).join(", ") : "none yet"}\nPending: ${ws.pending_withdrawal ? `$${ws.pending_withdrawal.amount.toFixed(2)} (${ws.pending_withdrawal.reason})` : "none"}`;
+                    result = "Withdrawal system is archived — not applicable to turbo-only mode.";
                     break;
                   }
 
@@ -930,11 +938,7 @@ BEHAVIOR:
 
                   // ── System Intelligence ──
                   case "get_compound_state": {
-                    const cs = getCompoundState();
-                    const unlocked = cs.strategies_unlocked.join(", ");
-                    const yields = Object.entries(cs.yield_by_strategy).map(([s, y]) => `  ${s}: ${y >= 0 ? "+" : ""}$${y.toFixed(2)}`).join("\n") || "  (no yield data yet)";
-                    const next = cs.next_phase ? `${cs.next_phase.emoji} ${cs.next_phase.name} at $${cs.next_phase.bankroll_needed}` : "MAX PHASE";
-                    result = `Phase: ${cs.phase_emoji} ${cs.phase_name} (#${cs.phase})\n${cs.phase_description}\n\nHighest bankroll: $${cs.highest_bankroll.toFixed(2)}\nNext phase: ${next}\nTransitions: ${cs.transitions.length}\n\nStrategies unlocked: ${unlocked}\n\nYield by strategy:\n${yields}\n\nWithdrawal:\n  Nest egg: $${cs.withdrawal.nest_egg.toFixed(2)}\n  Total withdrawn: $${cs.withdrawal.total_withdrawn.toFixed(2)}\n  Pending: ${cs.withdrawal.pending ? `$${cs.withdrawal.pending.amount.toFixed(2)}` : "none"}`;
+                    result = "Compound engine is archived — bot is in turbo-only mode.";
                     break;
                   }
                   case "get_open_positions": {
@@ -975,14 +979,11 @@ BEHAVIOR:
                     break;
                   }
                   case "get_tax_summary": {
-                    const year = inp.year || new Date().getFullYear();
-                    const tax = getTaxSummary(year);
-                    result = `Tax Summary (${year}):\nTotal P&L: ${tax.totalPnl >= 0 ? "+" : ""}$${tax.totalPnl.toFixed(2)}\nShort-term gains: $${tax.shortTermGains.toFixed(2)}\nShort-term losses: -$${Math.abs(tax.shortTermLosses).toFixed(2)}\nLong-term gains: $${tax.longTermGains.toFixed(2)}\nLong-term losses: -$${Math.abs(tax.longTermLosses).toFixed(2)}\nNet taxable: $${tax.netTaxable.toFixed(2)}\nEstimated tax: $${tax.estimatedTax.toFixed(2)}\nLots: ${tax.lotCount}`;
+                    result = "Tax tracker is archived — not applicable to turbo-only mode.";
                     break;
                   }
                   case "get_fill_stats": {
-                    const fs = getFillStats();
-                    result = `Maker: ${fs.maker.fills}/${fs.maker.attempts} fills (${(fs.maker.rate * 100).toFixed(0)}%)\nTaker: ${fs.taker.fills}/${fs.taker.attempts} fills (${(fs.taker.rate * 100).toFixed(0)}%)`;
+                    result = "Smart execution fill stats are archived — not applicable to turbo-only mode.";
                     break;
                   }
                   case "get_velocity_state": {

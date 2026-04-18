@@ -8,8 +8,11 @@
 // 5. CROSS-PLATFORM MIRROR  — Polymarket price reference for Kalshi trades
 
 import { KalshiClient, type KalshiMarket, centsToProbability } from "../../exchanges/kalshi/kalshi_client.js";
-import { getEconomicSnapshot, getEconomicEdge } from "../../feeds/fred.js";
-import { getWeatherEdge } from "../../feeds/nws.js";
+// ARCHIVED: import { getEconomicSnapshot, getEconomicEdge } from "../../feeds/fred.js";
+// ARCHIVED: import { getWeatherEdge } from "../../feeds/nws.js";
+const getEconomicSnapshot = () => null;
+const getEconomicEdge = (_m: any, _s?: any) => ({ edge: 0, edge_estimate: 0, direction: "YES" as const, has_edge: false, confidence: 0, reasoning: "archived" });
+const getWeatherEdge = (_m: any): any[] => [];
 import { detectOddsMovements, getSmartMoneySignal, type OddsMovement } from "../../feeds/odds_movement.js";
 import { detectCrossAssetCascade, predictSettlement, getPrice } from "../../feeds/binance.js";
 

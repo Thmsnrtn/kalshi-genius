@@ -1,7 +1,8 @@
 // src/notify.ts — Telegram notifications (optional)
 
 import { config, getPhaseParams } from "./config.js";
-import type { EliteAnalysis } from "../intelligence/analyst.js";
+// ARCHIVED: import type { EliteAnalysis } from "../intelligence/analyst.js";
+type EliteAnalysis = any;
 
 const enabled = !!(config.TELEGRAM_BOT_TOKEN && config.TELEGRAM_CHAT_ID);
 

@@ -33,7 +33,7 @@ import {
   scanHighConfidence,
   getOddsMovementSignals,
 } from "./strategies/kalshi/kalshi_strategies.js";
-import { scanWithEnsemble } from "./strategies/multi_model_ensemble.js";
+// ARCHIVED: import { scanWithEnsemble } from "./strategies/multi_model_ensemble.js";
 
 // MARKET MAKER
 import { findMarketMakingOpportunities, placeMarketMakerOrders, manageInventory } from "./strategies/kalshi/market_maker.js";
@@ -63,7 +63,12 @@ import { initGenius, deliberate, retrospect, registerDecision, startGeniusLoops,
 import { initAlphaSources, startAlphaSources, getFusedAlpha, getTriggeredAlphaMarkets, markActedOn } from "./alpha_sources/alpha_orchestrator.js";
 
 // COMPOUND ENGINE
-import { initCompoundTracking, updateCompoundState, isStrategyUnlocked, allocateCapital, recordStrategyYield, checkAutoWithdrawal } from "./compound/compound_engine.js";
+// ARCHIVED: import { initCompoundTracking, updateCompoundState, isStrategyUnlocked, allocateCapital, recordStrategyYield, checkAutoWithdrawal } from "./compound/compound_engine.js";
+// Stubs for archived modules
+const updateCompoundState = (_b: number) => {};
+const recordStrategyYield = (_s: string, _p: number) => {};
+const velocityAllocateTrade = (_p: any) => ({ approved: true, allocated_size: _p.size, tranche_id: `t-${Date.now()}` });
+const velocityReleaseTranche = (_t: string, _p: number) => {};
 
 // ADVANCED FEEDS (Order Book, Funding Rate, Liquidation, VWAP, VPIN)
 import { startAdvancedFeeds, getOrderBookImbalance, getFundingBias, detectLiquidationCascade, getVWAP, getVPIN, classifyTrade } from "./feeds/binance_advanced.js";
@@ -72,16 +77,16 @@ import { startAdvancedFeeds, getOrderBookImbalance, getFundingBias, detectLiquid
 import { classifyRegime, detectStalePrice, scoreConfluence, recordTimeProfile, getTimeAdvice, canTradeCircuitBreaker, recordTradeResult, correlationDiscount, recordSignalOutcome, getOptimalParameters } from "./core/genius_signals.js";
 
 // SMART EXECUTION (Order Routing, Partial Scaling)
-import { getOrderStrategy, createScaledEntry, checkScaleOut, recordFillStats } from "./core/smart_execution.js";
+// ARCHIVED: import { getOrderStrategy, createScaledEntry, checkScaleOut, recordFillStats } from "./core/smart_execution.js";
 
 // TAX TRACKING
-import { initTaxTracker, recordTaxLot, closeTaxLot, getTaxSummary } from "./core/tax_tracker.js";
+// ARCHIVED: import { initTaxTracker, recordTaxLot, closeTaxLot, getTaxSummary } from "./core/tax_tracker.js";
 
 // LIQUIDITY ENGINE
-import { initLiquidityEngine, wireLiquidityEngine, startLiquidityEngine } from "./liquidity/liquidity_orchestrator.js";
+// ARCHIVED: import { initLiquidityEngine, wireLiquidityEngine, startLiquidityEngine } from "./liquidity/liquidity_orchestrator.js";
 
 // VELOCITY ENGINE
-import { initVelocityOrchestrator, wireVelocityOrchestrator, startVelocityOrchestrator, velocityAllocateTrade, velocityReleaseTranche } from "./velocity/velocity_orchestrator.js";
+// ARCHIVED: import { initVelocityOrchestrator, wireVelocityOrchestrator, startVelocityOrchestrator, velocityAllocateTrade, velocityReleaseTranche } from "./velocity/velocity_orchestrator.js";
 
 // DASHBOARD
 import { startDashboard, setBotState, pushActivity } from "./dashboard/server.js";
@@ -236,10 +241,7 @@ async function main() {
   initGenius();
   registerBaseHypotheses();
   initAlphaSources();
-  initCompoundTracking(bankroll);
-  initLiquidityEngine(() => bankroll);
-  initVelocityOrchestrator();
-  initTaxTracker(getDb());
+  // ARCHIVED: initCompoundTracking, initLiquidityEngine, initVelocityOrchestrator, initTaxTracker
   console.log("✅ All layers initialized\n");
 
   // Expose state to dashboard (V4: with full chat controls)
@@ -457,13 +459,7 @@ async function main() {
     }
   }
 
-  // Wire and start liquidity engine
-  wireLiquidityEngine(kalshi, kalshiWs);
-  startLiquidityEngine();
-
-  // Wire and start velocity engine
-  wireVelocityOrchestrator(kalshi);
-  startVelocityOrchestrator(() => bankroll, () => paused, config.DRY_RUN);
+  // ARCHIVED: liquidity engine, velocity engine
 
   // Start evolution and genius loops
   startEvolutionLoops(() => bankroll, STARTING_BANKROLL);
@@ -654,19 +650,8 @@ async function main() {
             continue;
           }
 
-          // ══════════════════════════════════════════════════
-          // INTELLIGENCE LAYER 2: Adverse selection filter
-          // Detect when informed traders are active — reduce size or skip
-          // ══════════════════════════════════════════════════
-          const { computeAdverseScore } = await import("./liquidity/adverse_selection.js");
-          const adverseScore = computeAdverseScore(sig.ticker);
+          // ARCHIVED: Adverse selection filter (computeAdverseScore)
           let adverseMultiplier = 1.0;
-          if (adverseScore > 0.7) {
-            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.potential_return_pct, confidence: sig.confidence, reject_reason: "adverse_selection_high", market_question: sig.market_question, price: sig.contract_price });
-            continue; // Too toxic — skip entirely
-          } else if (adverseScore > 0.4) {
-            adverseMultiplier = 0.5; // Reduce size by 50%
-          }
 
           // ── Confluence scoring: boost confidence with multi-signal agreement ──
           const symbol = sig.ticker.toLowerCase().includes("btc") ? "btcusdt"
@@ -1250,82 +1235,7 @@ async function main() {
     console.log("🎯 High-confidence near-close scanner armed (1m scan, 85-94¢)");
   }
 
-  // ═══════════════════════════════════════════════════
-  // STRATEGY 9: Multi-Model Ensemble (Claude + GPT-4o)
-  // ═══════════════════════════════════════════════════
-  // Research-backed: weighted LLM ensemble for probability estimation.
-  // Unlocks at $500+ (Sapling phase) — API costs justified at scale.
-  if (config.STRATEGY_MULTI_MODEL) {
-    const runMultiModel = async () => {
-      try {
-        if (paused) return;
-
-        // BANKROLL GATE: requires $500+ to justify dual-model API costs
-        if (bankroll < 500) return;
-        if (!isStrategyUnlocked("multi_model_ensemble", bankroll)) return;
-
-        const { ok } = canTrade(bankroll, openPositionCount);
-        if (!ok) return;
-
-        // Use cached markets, pre-filter for tradeable range
-        const candidates = cachedMarkets
-          .filter(m => m.yes_price > 0.15 && m.yes_price < 0.85) // mid-range = most edge potential
-          .filter(m => {
-            if (!m.end_date) return true;
-            const hoursLeft = (new Date(m.end_date).getTime() - Date.now()) / (1000 * 60 * 60);
-            return hoursLeft > 1 && hoursLeft < 72;
-          })
-          .slice(0, 5)
-          .map(m => ({
-            ticker: m.condition_id,
-            question: m.question,
-            description: m.description,
-            yes_price: m.yes_price,
-            category: m.category,
-            close_time: m.end_date,
-          }));
-
-        if (candidates.length === 0) return;
-
-        console.log(`\n🤖 Multi-Model Ensemble: evaluating ${candidates.length} markets`);
-        const signals = await scanWithEnsemble(candidates, config.MULTI_MODEL_MIN_EDGE);
-        logScanStart("multi_model_ensemble", signals.length);
-
-        if (signals.length === 0) { telemetryNoEdge("multi_model_ensemble"); return; }
-
-        for (const sig of signals.slice(0, 2)) {
-          telemetryEvaluated("multi_model_ensemble");
-
-          const price = sig.direction === "YES" ? sig.market_probability : (1 - sig.market_probability);
-          const size = calculatePosition(Math.abs(sig.edge), price, bankroll, "multi_model_ensemble", {
-            confidence: sig.confidence,
-            consecutive_wins: consecutiveWins,
-          });
-          if (size < 1.00) { telemetrySizeMin("multi_model_ensemble"); continue; }
-
-          await executeTrade(kalshi, {
-            strategy: "multi_model_ensemble",
-            category: "ensemble",
-            question: sig.question,
-            ticker: sig.ticker,
-            direction: sig.direction,
-            price,
-            size,
-            reasoning: sig.reasoning,
-            edge: Math.abs(sig.edge),
-            confidence: sig.confidence,
-            hypothesisName: "multi_model_consensus",
-          });
-          telemetryTraded("multi_model_ensemble");
-          pushActivity("🤖", `Ensemble: ${sig.ticker} ${sig.direction} (${sig.model_estimates.map(e => `${e.model}:${(e.probability*100).toFixed(0)}%`).join("+")})`);
-        }
-        logScanComplete("multi_model_ensemble");
-      } catch {}
-    };
-    setTimeout(runMultiModel, 45000);
-    setInterval(runMultiModel, config.MULTI_MODEL_SCAN_INTERVAL_MS);
-    console.log("🤖 Multi-model ensemble armed (5m scan, unlocks at $500+)");
-  }
+  // ARCHIVED: Strategy 9 Multi-Model Ensemble — restore when bankroll > $500
 
   // ═══════════════════════════════════════════════════
   // ODDS MOVEMENT SCANNER (background signal)
@@ -1521,42 +1431,7 @@ async function executeTrade(kalshi: KalshiClient, params: {
     confidence: params.confidence, verdict: params.councilVerdict,
   });
 
-  // Compound engine: check strategy unlock and capital cap
-  if (!isStrategyUnlocked(params.strategy, bankroll)) {
-    console.log(`  🔒 ${params.strategy} locked at current bankroll`);
-    return;
-  }
-  const allocation = allocateCapital(params.strategy, params.size, bankroll);
-  if (allocation.size <= 0) {
-    console.log(`  🔒 ${params.strategy}: ${allocation.reason}`);
-    return;
-  }
-  if (allocation.capped) {
-    params.size = allocation.size;
-    console.log(`  📏 ${params.strategy} size capped: ${allocation.reason}`);
-  }
-
-  // Velocity engine: try to allocate a tranche (non-blocking — trade proceeds even without tranche)
-  const velocityResult = velocityAllocateTrade({
-    ticker: params.ticker,
-    side: params.direction,
-    entryPrice: params.price,
-    contracts: Math.max(1, Math.floor(params.size / params.price)),
-    sizeUsd: params.size,
-    edge: params.edge,
-    positionId: signalId,
-  });
-
-  if (!velocityResult) {
-    console.log(`  ⚡ Velocity: no tranche available — proceeding without velocity management`);
-  } else if (!velocityResult.passthrough) {
-    // Use velocity-allocated size (may be smaller if tranche capital is limited)
-    const velocitySize = velocityResult.capital_usd;
-    if (velocitySize < params.size) {
-      params.size = velocitySize;
-      console.log(`  ⚡ Velocity: tranche #${velocityResult.tranche_id} capped size to $${velocitySize.toFixed(2)}`);
-    }
-  }
+  // ARCHIVED: compound engine unlock/cap and velocity engine tranche allocation
 
   let result: any;
   const count = Math.max(1, Math.floor(params.size / params.price));
@@ -1659,13 +1534,7 @@ function simulateResolution(signalId: string, params: any) {
     pnl,
   });
 
-  // ── Tax lot tracking ──
-  try {
-    recordTaxLot(params.ticker, params.direction === "YES" ? "yes" : "no", params.price, Math.max(1, Math.floor(params.size / params.price)));
-    if (won || !won) { // Close lot on resolution
-      closeTaxLot(params.ticker, params.direction === "YES" ? "yes" : "no", params.price + (pnl / Math.max(1, Math.floor(params.size / params.price))), Math.max(1, Math.floor(params.size / params.price)));
-    }
-  } catch {}
+  // ARCHIVED: tax lot tracking
 
   if (won) {
     consecutiveWins++;
@@ -1702,14 +1571,7 @@ function checkMilestoneInline() {
     nextMilestone = config.MILESTONES.find(m => m > bankroll) ?? nextMilestone * 2;
   }
 
-  // Check auto-withdrawal at milestones
-  const withdrawal = checkAutoWithdrawal(bankroll, config.STARTING_BANKROLL);
-  if (withdrawal?.should_withdraw) {
-    console.log(`  💰 AUTO-WITHDRAWAL SUGGESTED: $${withdrawal.amount.toFixed(2)} → nest egg`);
-    console.log(`     Reason: ${withdrawal.reason}`);
-    console.log(`     Remaining bankroll: $${withdrawal.remaining_bankroll.toFixed(2)}`);
-    pushActivity("💰", `Withdrawal suggested: $${withdrawal.amount.toFixed(2)} → nest egg (confirm via chat)`);
-  }
+  // ARCHIVED: auto-withdrawal check
 }
 
 main().catch((err) => { console.error("Fatal:", err); process.exit(1); });

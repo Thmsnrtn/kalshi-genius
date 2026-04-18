@@ -21,12 +21,11 @@ import {
   type NewsSignal
 } from "./news_intelligence.js";
 
-import { 
-  initWhaleTracker, 
-  runWhaleTrackerCycle, 
-  detectConvergences,
-  type WhaleConvergence 
-} from "./whale_tracker_onchain.js";
+// ARCHIVED: whale tracker (Polymarket on-chain)
+type WhaleConvergence = { market_id: string; direction: string; whale_count: number; total_size: number; total_size_usd: number; avg_confidence: number; confidence: number; consensus_direction: string };
+const initWhaleTracker = () => {};
+const runWhaleTrackerCycle = async () => ({ tracked: 0, new_positions: 0, new_whales: 0, convergences: 0 });
+const detectConvergences = (): WhaleConvergence[] => [];
 
 import { 
   initOrderBookAnalyzer, 
@@ -177,7 +176,7 @@ export async function getFusedAlpha(marketId: string, marketQuestion: string, to
 
   if (whaleConvergence) {
     const weight = whaleConvergence.confidence * 2;
-    directionVotes[whaleConvergence.direction] += weight;
+    directionVotes[whaleConvergence.direction as "YES" | "NO"] += weight;
   }
 
   if (microstructureSignal?.direction_hint) {
