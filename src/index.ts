@@ -14,7 +14,7 @@
 import { config, getPhaseParams } from "./core/config.js";
 import { calculatePosition, canTrade, meetsEdgeThreshold, getExposure } from "./core/risk.js";
 import { getDb, logTrade, logRejectedSignal, openPosition, getOpenPositions, closePosition as dbClosePosition, logMilestone, getCalibrationData, getCouncilAttribution, getMilestones, getCachedVerdict, setCachedVerdict, cleanExpiredCache, getBotState, setBotState as dbSetBotState } from "./core/db.js";
-import { notifyStartup, notifyTrade, notifyExit, notifyMilestone } from "./core/notify.js";
+import { notifyStartup, notifyTrade, notifyExit, notifyMilestone, notifyError } from "./core/notify.js";
 import { startPriceFeed, getPrice } from "./feeds/binance.js";
 import { aggressiveKelly, getCalibrationFactor } from "./core/aggressive_kelly.js";
 import { logScanStart, logScanComplete, telemetryEvaluated, telemetryNoEdge, telemetryBelowThreshold, telemetrySizeMin, telemetryBlocked, telemetryTraded, telemetryCouncilDeliberation, telemetryCouncilSkip, getStrategyTelemetry, getCouncilTelemetry } from "./core/telemetry.js";
@@ -87,6 +87,9 @@ import { classifyRegime, detectStalePrice, scoreConfluence, recordTimeProfile, g
 
 // VELOCITY ENGINE
 // ARCHIVED: import { initVelocityOrchestrator, wireVelocityOrchestrator, startVelocityOrchestrator, velocityAllocateTrade, velocityReleaseTranche } from "./velocity/velocity_orchestrator.js";
+
+// AUTO-PAUSE (Operator Rule #1)
+import { initAutoPause, checkAutoPause, setAutoPauseCallback, clearAutoPause, getAutoPauseState, resetHighWaterMark } from "./core/auto_pause.js";
 
 // DASHBOARD
 import { startDashboard, setBotState, pushActivity } from "./dashboard/server.js";
@@ -217,6 +220,15 @@ async function main() {
     process.exit(1);
   }
 
+  // ── Initialize auto-pause-to-paper (Operator Rule #1) ──
+  initAutoPause(bankroll);
+  setAutoPauseCallback((reason) => {
+    (config as any).DRY_RUN = true;
+    console.log(`🚨 AUTO-PAUSE: Switched to PAPER mode — ${reason}`);
+    pushActivity("🚨", `AUTO-PAUSE: ${reason} — switched to paper mode`);
+    notifyError(`AUTO-PAUSE TRIGGERED: ${reason}\nBot switched to paper mode. Use chat to re-enable live trading.`);
+  });
+
   console.log(`🔒 Mode: ${config.DRY_RUN ? "PAPER (DRY_RUN=true)" : "LIVE (DRY_RUN=false)"} | Paused: ${paused} | Bankroll: $${bankroll.toFixed(2)}`);
 
   // ── Initialize Kalshi WebSocket ──
@@ -346,6 +358,18 @@ async function main() {
       console.log(`💰 Bankroll manually set to $${amount.toFixed(2)} via chat`);
     },
     getCachedMarkets: () => cachedMarkets,
+    // Auto-pause controls (Operator Rule #1)
+    getAutoPauseState,
+    clearAutoPause: () => {
+      clearAutoPause(bankroll);
+      (config as any).DRY_RUN = false;
+      console.log(`✅ Auto-pause cleared — switched back to LIVE mode`);
+      pushActivity("✅", `Auto-pause cleared — LIVE mode re-enabled at $${bankroll.toFixed(2)}`);
+    },
+    resetHWM: () => {
+      resetHighWaterMark(bankroll);
+      console.log(`🔄 HWM reset to current bankroll $${bankroll.toFixed(2)}`);
+    },
   });
 
   // Start dashboard
@@ -499,6 +523,7 @@ async function main() {
     console.log(`  📤 EXIT ${ticker}: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} [${reason}] | Bankroll: $${bankroll.toFixed(2)}`);
     pushActivity("📤", `Exit ${ticker}: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} [${reason}]`);
     notifyExit(ticker, pnl, reason, bankroll);
+    checkAutoPause(bankroll, config.DRY_RUN);
     checkMilestoneInline();
   });
 
@@ -536,6 +561,7 @@ async function main() {
     openPositionCount = Math.max(0, openPositionCount - 1);
     updateCompoundState(bankroll);
     if (ticker) velocityReleaseTranche(ticker, pnl);
+    checkAutoPause(bankroll, config.DRY_RUN);
     checkMilestoneInline();
   });
 
@@ -554,6 +580,7 @@ async function main() {
           bankroll = newBankroll;
           updateCompoundState(bankroll);
           setBrainBankroll(bankroll); // V5: Brain needs bankroll for sizing
+          checkAutoPause(bankroll, config.DRY_RUN); // Auto-pause check on sync
         }
         lastBankrollSyncAt = Date.now();
         // V6: Log bankroll snapshot for equity curve

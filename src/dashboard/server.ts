@@ -68,6 +68,10 @@ export interface BotState {
   placeTrade?: (ticker: string, direction: "YES" | "NO", size: number) => Promise<string>;
   setBankroll?: (amount: number) => void;
   getCachedMarkets?: () => any[];
+  // Auto-pause controls
+  getAutoPauseState?: () => any;
+  clearAutoPause?: () => void;
+  resetHWM?: () => void;
 }
 
 let botState: BotState | null = null;
@@ -160,6 +164,9 @@ function buildSnapshot() {
     rejected_today: rejectedCount,
     estimated_api_cost: estimatedApiCost,
     council_calls_today: councilCalls,
+
+    // Auto-pause state (Operator Rule #1)
+    auto_pause: botState?.getAutoPauseState?.() ?? null,
 
     // V4: Engine state for dashboard
     liquidity: getLiquidityState(),
@@ -613,6 +620,10 @@ BEHAVIOR:
             { name: "get_velocity_state", description: "Get velocity engine state — active tranches, capital cycling rate, ladder positions.", input_schema: { type: "object" as const, properties: {} } },
             { name: "get_evolution_state", description: "Get evolution engine state — strategy weights, regime detection, performance tracking, prompt evolution status.", input_schema: { type: "object" as const, properties: {} } },
             { name: "get_genius_state", description: "Get genius layer state — hypothesis lab, strategy genetics, calibration engine, counterfactual tracking.", input_schema: { type: "object" as const, properties: {} } },
+            // Auto-pause (Operator Rule #1)
+            { name: "get_auto_pause_state", description: "Get auto-pause state — high water mark, drawdown %, whether auto-pause is active, and reason.", input_schema: { type: "object" as const, properties: {} } },
+            { name: "clear_auto_pause", description: "Clear auto-pause and switch back to LIVE trading mode. Use when operator confirms they want to resume live.", input_schema: { type: "object" as const, properties: {} } },
+            { name: "reset_hwm", description: "Reset the high water mark to the current bankroll. Use after operator deposits or withdraws funds.", input_schema: { type: "object" as const, properties: {} } },
           ];
 
           const messages = [
@@ -989,6 +1000,24 @@ BEHAVIOR:
                   case "get_velocity_state": {
                     const vs = getVelocityState();
                     result = JSON.stringify(vs, null, 2);
+                    break;
+                  }
+                  case "get_auto_pause_state": {
+                    if (!botState?.getAutoPauseState) { result = "Auto-pause not initialized."; break; }
+                    const ap = botState.getAutoPauseState();
+                    result = `Auto-pause: ${ap.is_auto_paused ? "🚨 ACTIVE" : "✅ Armed"}\nHigh water mark: $${ap.high_water_mark.toFixed(2)}\nSession start: $${ap.session_start_bankroll.toFixed(2)}\nDrawdown from HWM: ${(ap.drawdown_pct * 100).toFixed(1)}%\nSession drawdown: ${(ap.session_drawdown_pct * 100).toFixed(1)}%${ap.is_auto_paused ? `\nPause reason: ${ap.pause_reason}\nPaused at: ${ap.pause_timestamp ? new Date(ap.pause_timestamp).toLocaleString() : "unknown"}` : ""}`;
+                    break;
+                  }
+                  case "clear_auto_pause": {
+                    if (!botState?.clearAutoPause) { result = "Auto-pause not initialized."; break; }
+                    botState.clearAutoPause();
+                    result = "Auto-pause cleared. Bot switched back to LIVE mode. HWM and session start reset to current bankroll.";
+                    break;
+                  }
+                  case "reset_hwm": {
+                    if (!botState?.resetHWM) { result = "Auto-pause not initialized."; break; }
+                    botState.resetHWM();
+                    result = "High water mark reset to current bankroll.";
                     break;
                   }
                   case "get_evolution_state": {
