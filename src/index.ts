@@ -1505,10 +1505,19 @@ async function executeTrade(kalshi: KalshiClient, params: {
   totalTrades++;
   openPositionCount++;
 
-  // DRY_RUN simulation — faster resolution for aggressive testing
+  // DRY_RUN simulation — for turbo markets, wait actual 15 min, then check real price
   if (config.DRY_RUN) {
-    const holdMs = 60 * 1000 + Math.random() * 120 * 1000;  // 1-3 min (faster feedback loop)
-    setTimeout(() => simulateResolution(signalId, params), holdMs);
+    const isTurbo = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"].some(p => (params.ticker || "").startsWith(p));
+    // Capture Binance entry price for real-data resolution
+    const turboAsset = (params.ticker || "").includes("BTC") ? "btcusdt"
+      : (params.ticker || "").includes("ETH") ? "ethusdt"
+      : (params.ticker || "").includes("SOL") ? "solusdt"
+      : "xrpusdt";
+    const enrichedParams = { ...params, _entryBinancePrice: getPrice(turboAsset) };
+    const holdMs = isTurbo
+      ? 15 * 60 * 1000 + 10 * 1000 // 15 min + 10s buffer (wait for actual settlement)
+      : 60 * 1000 + Math.random() * 120 * 1000; // Non-turbo: 1-3 min
+    setTimeout(() => simulateResolution(signalId, enrichedParams), holdMs);
   }
 
   await notifyTrade({
@@ -1519,22 +1528,45 @@ async function executeTrade(kalshi: KalshiClient, params: {
 }
 
 function simulateResolution(signalId: string, params: any) {
-  // Calibrated win probabilities per strategy
-  const winProbs: Record<string, number> = {
-    hourly_sniper: 0.82,
-    monotonicity_arb: 0.95,
-    mispricing: 0.62,
-    cross_platform: 0.68,
-    economic_release: 0.65,
-    weather_edge: 0.60,
-    market_maker: 0.70,
-  };
+  // For turbo markets: use actual Binance price to determine outcome
+  // For others: fall back to calibrated simulation
+  const isTurbo = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"].some(p => (params.ticker || "").startsWith(p));
+  let won: boolean;
+  let pnl: number;
 
-  const winProb = winProbs[params.strategy] ?? 0.55;
-  const won = Math.random() < winProb;
-  const pnl = won
-    ? params.size * (params.edge || 0.08) * (0.8 + Math.random() * 0.4)
-    : -params.size * (0.3 + Math.random() * 0.4);
+  if (isTurbo) {
+    // Real-data paper resolution: check actual Binance price movement
+    const turboAsset = (params.ticker || "").includes("BTC") ? "btcusdt"
+      : (params.ticker || "").includes("ETH") ? "ethusdt"
+      : (params.ticker || "").includes("SOL") ? "solusdt"
+      : "xrpusdt";
+    const currentPrice = getPrice(turboAsset) ?? 0;
+    // Approximate: use entry price stored at trade time vs current price
+    const entryPrice = params._entryBinancePrice ?? currentPrice;
+    const priceWentUp = currentPrice > entryPrice;
+    // Turbo markets settle YES if price is above strike
+    // Bot bets YES if it thinks price goes up, NO if down
+    const betOnUp = params.direction === "YES";
+    won = (betOnUp && priceWentUp) || (!betOnUp && !priceWentUp);
+    // Realistic PnL: binary contract payout
+    const entryPriceCents = Math.round(params.price * 100);
+    pnl = won
+      ? params.size * ((100 - entryPriceCents) / entryPriceCents) // win: payout ratio
+      : -params.size; // loss: full cost (binary option)
+  } else {
+    // Non-turbo: calibrated simulation (legacy)
+    const winProbs: Record<string, number> = {
+      hourly_sniper: 0.65, // Lowered from 0.82 to be realistic
+      monotonicity_arb: 0.90,
+      mispricing: 0.55,
+      cross_platform: 0.58,
+    };
+    const winProb = winProbs[params.strategy] ?? 0.50;
+    won = Math.random() < winProb;
+    pnl = won
+      ? params.size * (params.edge || 0.05) * (0.6 + Math.random() * 0.4)
+      : -params.size * (0.3 + Math.random() * 0.4);
+  }
 
   if (config.DRY_RUN) {
     bankroll += pnl; // paper trading accumulator
