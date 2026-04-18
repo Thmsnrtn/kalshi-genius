@@ -15,6 +15,7 @@
 // because each level of learning informs and accelerates the others.
 
 import { config } from "../core/config.js";
+import { getDb } from "../core/db.js";
 import { recordResolution, getTopPerformers, getPerformance } from "./performance_tracker.js";
 import { updateWeight, getAllWeights, getWeight } from "./strategy_weights.js";
 import { reinforcePattern, recordEpisode, discoverPatterns, getActivePlaybooks } from "./memory.js";
@@ -157,11 +158,34 @@ export async function mesoCycle(currentBankroll: number, startingBankroll: numbe
   }
 }
 
+// Bankroll getter — set by startEvolutionLoops
+let _getBankroll: (() => number) | null = null;
+let _lastMacroRanAt = 0; // Tracks when macro cycle actually ran (not skipped)
+
 // ═══════════════════════════════════════════════════════
 // MACRO CYCLE — every hour
 // Pattern discovery and prompt evolution
 // ═══════════════════════════════════════════════════════
 export async function macroCycle() {
+  // Refined bankroll gate:
+  // Run when: bankroll >= $50 AND (20+ new trades since last run OR 24h since last run)
+  const currentBankroll = _getBankroll?.() ?? 0;
+  if (currentBankroll < 50) {
+    console.log(`  🧬 [M] Macro: skipping — bankroll $${currentBankroll.toFixed(2)} below $50 gate`);
+    return;
+  }
+
+  const db = getDb();
+  const lastRanIso = _lastMacroRanAt > 0 ? new Date(_lastMacroRanAt).toISOString() : new Date(0).toISOString();
+  const tradesSinceLastRun = (db.prepare(`SELECT COUNT(*) as c FROM trades WHERE timestamp > ?`).get(lastRanIso) as any)?.c ?? 0;
+  const hoursSinceLastRun = _lastMacroRanAt > 0 ? (Date.now() - _lastMacroRanAt) / (60 * 60 * 1000) : Infinity;
+
+  if (tradesSinceLastRun < 20 && hoursSinceLastRun < 24) {
+    console.log(`  🧬 [M] Macro: skipping — ${tradesSinceLastRun} trades (need 20) and ${hoursSinceLastRun.toFixed(1)}h since last run (need 24h)`);
+    return;
+  }
+
+  _lastMacroRanAt = Date.now();
   state.last_macro_cycle = Date.now();
   console.log(`\n  🧬 [M] Macro evolution cycle`);
 
@@ -226,6 +250,8 @@ export async function consolidationCycle() {
 // MASTER EVOLUTION SETUP
 // ═══════════════════════════════════════════════════════
 export function startEvolutionLoops(getBankroll: () => number, startingBankroll: number) {
+  _getBankroll = getBankroll;
+
   // Micro: every 5 minutes
   setInterval(() => microCycle().catch(console.error), 5 * 60 * 1000);
 

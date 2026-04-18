@@ -1,5 +1,8 @@
 // src/genius/cognitive_council.ts
 //
+// Cost optimization: Bull/Bear/Quant/Sage use Haiku (~$0.01 each),
+// Judge uses Sonnet (~$0.03) for the final synthesis. Total ~$0.07/deliberation.
+//
 // THE COGNITIVE COUNCIL
 //
 // Instead of one Claude analyzing each trade, FOUR specialized Claude
@@ -51,7 +54,7 @@ export interface CouncilVerdict {
 // ═══ THE BULL ═══
 async function bullAnalyze(question: string, description: string, yesPrice: number, noPrice: number, category: string) {
   const res = await client.messages.create({
-    model: config.CLAUDE_MODEL,
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 800,
     system: `You are THE BULL — an aggressive prediction market trader who argues FOR taking positions.
 Your job: find the strongest possible thesis for why this market is a BUY.
@@ -86,7 +89,7 @@ You MUST call the "bull_position" tool.`,
 // ═══ THE BEAR ═══
 async function bearAnalyze(question: string, description: string, yesPrice: number, noPrice: number, category: string, bullPosition: any) {
   const res = await client.messages.create({
-    model: config.CLAUDE_MODEL,
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 800,
     system: `You are THE BEAR — a skeptical prediction market trader who argues AGAINST positions.
 Your job: find every reason the Bull might be WRONG.
@@ -121,7 +124,7 @@ You MUST call the "bear_position" tool.`,
 // ═══ THE QUANT ═══
 async function quantAnalyze(question: string, description: string, yesPrice: number, noPrice: number, category: string) {
   const res = await client.messages.create({
-    model: config.CLAUDE_MODEL,
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 700,
     system: `You are THE QUANT — a pure numbers analyst with zero narrative bias.
 Your job: compute base rates. Ignore stories entirely. Work from reference classes.
@@ -160,7 +163,7 @@ You MUST call the "quant_view" tool.`,
 // ═══ THE SAGE ═══
 async function sageAnalyze(question: string, bullPos: any, bearPos: any, quantPos: any) {
   const res = await client.messages.create({
-    model: config.CLAUDE_MODEL,
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 800,
     system: `You are THE SAGE — the meta-level observer who watches the Bull, Bear, and Quant argue.
 Your job: identify what ALL THREE are missing.
@@ -210,7 +213,15 @@ Decision framework:
 5. Size based on council agreement — high agreement = larger size, dissent = smaller
 6. Set confidence = f(council_agreement, quant_base_rate_certainty, edge_magnitude)
 
-You MUST call the "verdict" tool. Be DECISIVE and HONEST.`,
+IMPORTANT BIAS TOWARD ACTION: You are running a high-frequency prediction market bot.
+- The bot's edge is SPEED and TURNOVER — trading many short-duration markets, not holding long-term.
+- If edge > 5% and at least 2 council members agree on direction, verdict should be TAKE.
+- PASS should only be used when edge is truly negligible (<3%) or risk is extreme.
+- Even moderate disagreement is OK — set a lower size_multiplier (0.3-0.6) rather than passing entirely.
+- Markets resolve within hours to days. Fast capital turnover = more compounding cycles.
+- Think of it this way: a 5% edge traded 20 times beats a 15% edge traded once.
+
+You MUST call the "verdict" tool. Be DECISIVE — action with small size beats inaction.`,
     tools: [{
       name: "verdict",
       description: "Final council verdict",
@@ -281,6 +292,15 @@ export async function convene(question: string, description: string, yesPrice: n
 
   // Bear reads the bull position to critique it
   const bearPos = await bearAnalyze(question, description, yesPrice, noPrice, category, bullPos);
+
+  // Quorum shortcut: if all three agree on SKIP/no-edge, skip Sage+Judge (saves 2 API calls)
+  const bullDir = bullPos?.direction ?? "SKIP";
+  const bearDir = bearPos?.alternative_direction ?? "SKIP";
+  const quantDir = quantPos?.recommendation ?? "SKIP";
+  if (bullDir === "SKIP" && bearDir === "SKIP" && quantDir === "SKIP") {
+    console.log("  ⚡ Council quorum: unanimous SKIP — saving 2 API calls");
+    return defaultVerdict(bullPos, bearPos, quantPos, null);
+  }
 
   // Sage sees all three
   const sageInsight = await sageAnalyze(question, bullPos, bearPos, quantPos);

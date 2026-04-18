@@ -25,7 +25,7 @@ interface WhaleConsensus {
 // Fetch positions for a given wallet from Polymarket's public API
 async function fetchWalletPositions(wallet: string): Promise<WhalePosition[]> {
   try {
-    const url = `${config.GAMMA_API_URL}/positions?user=${wallet}&sizeThreshold=100`;
+    const url = `https://gamma-api.polymarket.com/positions?user=${wallet}&sizeThreshold=100`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data: any[] = await res.json();

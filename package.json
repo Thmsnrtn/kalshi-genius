@@ -1,7 +1,7 @@
 {
   "name": "polymarket-genius",
-  "version": "6.0.0",
-  "description": "Ultimate Edition — 6-layer cognitive trading architecture with phone dashboard",
+  "version": "7.0.0",
+  "description": "Genius V3.1 — 8-layer cognitive Kalshi trading bot with bankroll-gated council",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
@@ -10,12 +10,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "ethers": "^6.13.0",
-    "better-sqlite3": "^11.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "@types/ws": "^8.5.10",
     "bun-types": "^1.1.0",
     "typescript": "^5.5.0"

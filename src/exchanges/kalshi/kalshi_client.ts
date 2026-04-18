@@ -17,6 +17,60 @@
 import { createSign, createPrivateKey, type KeyObject } from "crypto";
 import { readFileSync } from "fs";
 
+// ── GLOBAL SPORTS MARKET EXCLUSION ──
+// Massachusetts legal constraint: Commonwealth v. KalshiEX preliminary injunction
+// blocks sports event contracts. This filter is hardcoded and cannot be disabled
+// via config, env var, or dashboard toggle. The only way to change it is a code
+// change requiring a redeploy.
+// Precise sports league prefixes + KXMVE (multi-variable events, currently all sports).
+// Category="Sports" check in isExcludedMarket() is the primary filter.
+// These patterns are belt-and-suspenders for the placeOrder() guard.
+// IMPORTANT: Do NOT add broad wildcards like KX.*GAME, KX.*WINS etc. —
+// they false-positive on non-sports markets (Oscar scores, election wins, etc.)
+const SPORTS_TICKER_PATTERNS = [
+  /^KXNBA/i,
+  /^KXNFL/i,
+  /^KXMLB/i,
+  /^KXNHL/i,
+  /^KXNCAA/i,
+  /^KXMVE/i,        // Multi-variable events — currently all sports on Kalshi
+  /^KXSPORTS/i,     // Explicit sports prefix
+];
+
+const loggedExclusions = new Set<string>();
+
+export function isExcludedMarket(ticker: string, category?: string, eventTicker?: string): boolean {
+  // Check category
+  if (category && /^sports$/i.test(category)) return true;
+
+  // Check ticker patterns
+  const t = ticker || "";
+  for (const pattern of SPORTS_TICKER_PATTERNS) {
+    if (pattern.test(t)) return true;
+  }
+
+  // Check event_ticker patterns (series-level exclusion)
+  const et = eventTicker || "";
+  for (const pattern of SPORTS_TICKER_PATTERNS) {
+    if (pattern.test(et)) return true;
+  }
+
+  return false;
+}
+
+function filterAndLogExclusions(markets: KalshiMarket[]): KalshiMarket[] {
+  return markets.filter(m => {
+    if (isExcludedMarket(m.ticker, m.category, m.event_ticker)) {
+      if (!loggedExclusions.has(m.ticker)) {
+        loggedExclusions.add(m.ticker);
+        console.log(`[Filter] Excluded sports market: ${m.ticker}`);
+      }
+      return false;
+    }
+    return true;
+  });
+}
+
 export type KalshiEnvironment = "demo" | "production";
 
 export interface KalshiConfig {
@@ -52,11 +106,16 @@ export interface KalshiMarket {
   open_interest_fp: string;
   result: string;
   category?: string;
-  // Convenience getters (computed)
+  // Convenience getters (computed) — rounded to cents
   yes_bid: number;
   yes_ask: number;
   no_bid: number;
   no_ask: number;
+  // Sub-cent precision (dollar values) for turbo markets
+  yes_bid_precise: number;
+  yes_ask_precise: number;
+  no_bid_precise: number;
+  no_ask_precise: number;
   volume: number;
   volume_24h: number;
 }
@@ -195,12 +254,28 @@ export class KalshiClient {
 
     const path = `/markets?${params.toString()}`;
     const raw = await this.request<{ markets: any[]; cursor: string }>("GET", path);
-    return { cursor: raw.cursor, markets: raw.markets.map(parseKalshiMarket) };
+    const parsed = raw.markets.map(parseKalshiMarket);
+    return { cursor: raw.cursor, markets: filterAndLogExclusions(parsed) };
   }
 
   async getMarket(ticker: string): Promise<{ market: KalshiMarket }> {
+    if (isExcludedMarket(ticker)) {
+      if (!loggedExclusions.has(ticker)) {
+        loggedExclusions.add(ticker);
+        console.log(`[Filter] Excluded sports market: ${ticker}`);
+      }
+      throw new Error(`Market ${ticker} is excluded (sports)`);
+    }
     const raw = await this.request<{ market: any }>("GET", `/markets/${ticker}`);
-    return { market: parseKalshiMarket(raw.market) };
+    const market = parseKalshiMarket(raw.market);
+    if (isExcludedMarket(market.ticker, market.category, market.event_ticker)) {
+      if (!loggedExclusions.has(market.ticker)) {
+        loggedExclusions.add(market.ticker);
+        console.log(`[Filter] Excluded sports market: ${market.ticker}`);
+      }
+      throw new Error(`Market ${market.ticker} is excluded (sports)`);
+    }
+    return { market };
   }
 
   async getEvents(opts: {
@@ -218,6 +293,47 @@ export class KalshiClient {
     if (opts.with_nested_markets) params.set("with_nested_markets", "true");
 
     return this.request("GET", `/events?${params.toString()}`);
+  }
+
+  // ── Fetch all non-sports markets via events endpoint ──
+  // The default /markets listing is flooded with thousands of KXMVE sports
+  // markets. The events endpoint groups by category, so we can skip Sports
+  // and collect everything else in a few paginated calls.
+  async getAllNonSportsMarkets(): Promise<KalshiMarket[]> {
+    const EXCLUDED_CATEGORIES = new Set(["Sports"]);
+    const allMarkets: KalshiMarket[] = [];
+    let cursor = "";
+    const maxPages = 8;
+
+    for (let page = 0; page < maxPages; page++) {
+      const result = await this.getEvents({
+        limit: 100,
+        cursor: cursor || undefined,
+        with_nested_markets: true,
+      });
+
+      const events = result.events ?? [];
+      if (events.length === 0) break;
+
+      for (const event of events) {
+        const category = event.category ?? "";
+        if (EXCLUDED_CATEGORIES.has(category)) continue;
+        // Also skip KXMVE event tickers (sports multi-variable events)
+        if ((event.event_ticker ?? "").startsWith("KXMVE")) continue;
+
+        for (const rawMarket of event.markets ?? []) {
+          const parsed = parseKalshiMarket(rawMarket);
+          if (!isExcludedMarket(parsed.ticker, parsed.category, parsed.event_ticker)) {
+            allMarkets.push(parsed);
+          }
+        }
+      }
+
+      cursor = result.cursor ?? "";
+      if (!cursor) break;
+    }
+
+    return allMarkets;
   }
 
   async getOrderbook(ticker: string, depth = 10): Promise<{ orderbook: KalshiOrderBook }> {
@@ -251,6 +367,11 @@ export class KalshiClient {
   }
 
   async placeOrder(order: KalshiOrderRequest): Promise<KalshiOrderResponse> {
+    // Belt-and-suspenders: block sports orders even if market filter was somehow bypassed
+    if (isExcludedMarket(order.ticker)) {
+      console.log(`[Filter] BLOCKED order on excluded sports market: ${order.ticker}`);
+      throw new Error(`Order blocked: ${order.ticker} is an excluded sports market`);
+    }
     return this.request("POST", "/portfolio/orders", order);
   }
 
@@ -280,12 +401,18 @@ function parseKalshiMarket(raw: any): KalshiMarket {
   const yesAsk = parseFloat(raw.yes_ask_dollars ?? "0");
   const noBid = parseFloat(raw.no_bid_dollars ?? "0");
   const noAsk = parseFloat(raw.no_ask_dollars ?? "0");
+  // Use Math.round for cent-precision, but also store raw dollar values for sub-cent markets
   return {
     ...raw,
     yes_bid: Math.round(yesBid * 100),
     yes_ask: Math.round(yesAsk * 100),
     no_bid: Math.round(noBid * 100),
     no_ask: Math.round(noAsk * 100),
+    // Sub-cent precision for turbo markets (0.1¢ increments)
+    yes_bid_precise: yesBid,
+    yes_ask_precise: yesAsk,
+    no_bid_precise: noBid,
+    no_ask_precise: noAsk,
     volume: parseFloat(raw.volume_fp ?? "0"),
     volume_24h: parseFloat(raw.volume_24h_fp ?? "0"),
   };
@@ -319,7 +446,7 @@ export function kalshiMarketToUnified(km: KalshiMarket) {
     no_price: noPrice,
     yes_token_id: `${km.ticker}-yes`,
     no_token_id: `${km.ticker}-no`,
-    end_date: km.expected_expiration_time,
+    end_date: km.close_time || km.expected_expiration_time,
     raw: km,
   };
 }

@@ -3,442 +3,832 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0a0a0f">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Genius">
-  <title>🧠 Genius</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Kalshi Genius</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F9E0;</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
-    body {
-      background: radial-gradient(ellipse at top, #1a1a2e 0%, #0a0a0f 50%);
-      min-height: 100vh;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-      -webkit-font-smoothing: antialiased;
-      color: #e5e7eb;
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #000; --card: rgba(28,28,30,0.85); --card-border: rgba(255,255,255,0.06);
+      --text: #f5f5f7; --dim: rgba(255,255,255,0.55); --faint: rgba(255,255,255,0.25);
+      --accent: #0a84ff; --green: #30d158; --red: #ff453a; --orange: #ff9f0a; --purple: #bf5af2;
+      --radius: 16px; --rsm: 10px;
     }
-    .glass {
-      background: rgba(24, 24, 36, 0.6);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    .pulse-dot {
-      animation: pulse 2s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.6; transform: scale(1.15); }
-    }
-    .shimmer {
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
-      background-size: 200% 100%;
-      animation: shimmer 2s infinite;
-    }
-    @keyframes shimmer {
-      0% { background-position: -200% 0; }
-      100% { background-position: 200% 0; }
-    }
-    .gradient-text {
-      background: linear-gradient(135deg, #a78bfa 0%, #60a5fa 50%, #34d399 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .trade-flash {
-      animation: flash 0.6s ease-out;
-    }
-    @keyframes flash {
-      0% { background: rgba(52, 211, 153, 0.3); }
-      100% { background: transparent; }
-    }
-    /* Hide scrollbar but allow scroll */
-    .scroll-x::-webkit-scrollbar { display: none; }
-    .scroll-x { -ms-overflow-style: none; scrollbar-width: none; }
-    /* Smooth number changes */
-    .num-transition { transition: color 0.3s ease; }
-    /* Touch ripple effect */
-    button:active { transform: scale(0.96); }
-    button { transition: transform 0.1s; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; overflow-x: hidden; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); }
+    .lbl { font-size: 11px; font-weight: 500; letter-spacing: 0.5px; text-transform: uppercase; color: var(--dim); }
+    .cap { font-size: 12px; color: var(--dim); }
+    .mono { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+    button { border: none; cursor: pointer; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s; }
+    button:active { transform: scale(0.97); opacity: 0.8; }
+
+    /* Tab bar */
+    .tabs { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; align-items: center; background: rgba(18,18,20,0.94); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-top: 1px solid rgba(255,255,255,0.08); padding: 6px 0 max(env(safe-area-inset-bottom), 10px); z-index: 100; }
+    .tab { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; color: var(--faint); font-size: 10px; font-weight: 500; padding: 4px 12px; }
+    .tab.on { color: var(--accent); }
+    .tab svg { width: 22px; height: 22px; fill: currentColor; }
+
+    .page { display: none; padding: 12px 12px 90px; max-width: 430px; margin: 0 auto; }
+    .page.on { display: block; }
+
+    /* Status header */
+    .status-bar { display: flex; align-items: center; gap: 6px; padding: 8px 0 4px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; }
+    .dot.live { background: var(--green); animation: blink 2s infinite; }
+    .dot.paper { background: var(--orange); }
+    @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0.3 } }
+
+    /* Hero balance */
+    .hero { text-align: center; padding: 20px 16px; margin-bottom: 12px; }
+    .hero-amount { font-size: 52px; font-weight: 700; letter-spacing: -2px; line-height: 1; }
+    .hero-sub { font-size: 15px; margin-top: 8px; }
+
+    /* Stat row */
+    .stats { display: grid; gap: 8px; margin-bottom: 12px; }
+    .stats-2 { grid-template-columns: 1fr 1fr; }
+    .stats-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .stat { padding: 12px; text-align: center; }
+    .stat-val { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+    .stat-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--dim); margin-top: 2px; }
+
+    /* Chart */
+    .chart-wrap { position: relative; margin-bottom: 12px; padding: 12px; }
+    .chart-pills { display: flex; gap: 4px; margin-bottom: 8px; }
+    .pill { background: rgba(255,255,255,0.06); border: none; color: var(--dim); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
+    .pill.on { background: var(--accent); color: #fff; }
+    .chart-box { position: relative; width: 100%; height: 160px; }
+    .chart-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    .chart-box.expanded { height: 300px; }
+
+    /* Money flow bars */
+    .flow-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--card-border); }
+    .flow-row:last-child { border-bottom: none; }
+    .flow-asset { font-size: 13px; font-weight: 700; width: 32px; }
+    .flow-bar { flex: 1; height: 6px; background: rgba(255,255,255,0.04); border-radius: 3px; overflow: hidden; position: relative; }
+    .flow-fill { height: 100%; border-radius: 3px; position: absolute; top: 0; }
+    .flow-num { font-size: 12px; font-weight: 600; width: 55px; text-align: right; }
+
+    /* Position cards */
+    .pos-card { padding: 14px; margin-bottom: 8px; cursor: pointer; transition: background 0.15s; }
+    .pos-card:active { background: rgba(255,255,255,0.04); }
+    .pos-header { display: flex; justify-content: space-between; align-items: center; }
+    .pos-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+    .pos-badge.yes { background: rgba(48,209,88,0.15); color: var(--green); }
+    .pos-badge.no { background: rgba(255,69,58,0.15); color: var(--red); }
+    .pos-pnl { font-size: 18px; font-weight: 700; }
+    .pos-detail { display: flex; justify-content: space-between; margin-top: 6px; }
+    .pos-spark { height: 32px; margin-top: 6px; }
+
+    /* Position detail sheet */
+    .sheet-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 200; display: none; }
+    .sheet-overlay.on { display: flex; align-items: flex-end; }
+    .sheet { width: 100%; max-height: 85vh; background: #1c1c1e; border-radius: 20px 20px 0 0; padding: 16px; overflow-y: auto; }
+    .sheet-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin: 0 auto 12px; }
+    .sheet-chart { width: 100%; height: 240px; position: relative; }
+    .sheet-chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+    /* Growth target */
+    .target-bar { height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
+    .target-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+
+    /* Trade list */
+    .trade-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--card-border); }
+    .trade-row:last-child { border-bottom: none; }
+
+    /* Feed */
+    .feed-item { font-size: 12px; padding: 4px 0; color: var(--dim); }
+    .feed-time { color: var(--faint); margin-right: 6px; font-size: 11px; }
+
+    /* Controls */
+    .switch { width: 48px; height: 28px; border-radius: 14px; background: rgba(255,255,255,0.1); border: none; position: relative; transition: background 0.2s; }
+    .switch::after { content: ''; width: 22px; height: 22px; border-radius: 11px; background: #fff; position: absolute; top: 3px; left: 3px; transition: transform 0.2s; }
+    .switch.on { background: var(--green); }
+    .switch.on::after { transform: translateX(20px); }
+    .ctrl-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--card-border); }
+
+    /* Chat */
+    .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 100px); }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 8px 0; }
+    .chat-bubble { max-width: 85%; padding: 10px 14px; border-radius: 16px; margin-bottom: 8px; font-size: 14px; line-height: 1.4; word-wrap: break-word; }
+    .chat-bubble.user { background: var(--accent); color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
+    .chat-bubble.bot { background: rgba(255,255,255,0.08); margin-right: auto; border-bottom-left-radius: 4px; }
+    .chat-bubble.bot pre { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 6px 0; }
+    .chat-bubble.bot code { font-size: 12px; }
+    .chat-input-wrap { display: flex; gap: 8px; padding: 8px 0; }
+    .chat-input-wrap textarea { flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; color: var(--text); font-size: 15px; padding: 10px 16px; resize: none; font-family: inherit; outline: none; }
+    .chat-send { width: 40px; height: 40px; border-radius: 20px; background: var(--accent); color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; align-self: flex-end; }
+    .chat-typing { font-size: 13px; color: var(--dim); padding: 8px; animation: blink 1.5s infinite; }
+
+    /* Live confirm overlay */
+    .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 300; display: none; align-items: center; justify-content: center; padding: 20px; }
+    .confirm-overlay.show { display: flex; }
+    .confirm-box { background: #1c1c1e; border-radius: 16px; padding: 24px; max-width: 340px; width: 100%; }
+    .confirm-box input { width: 100%; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; color: var(--text); font-size: 18px; padding: 12px; text-align: center; font-family: inherit; outline: none; margin: 12px 0; }
+    .confirm-btn { width: 100%; padding: 14px; border-radius: 12px; font-size: 16px; font-weight: 600; margin-top: 8px; }
   </style>
 </head>
-<body class="pb-20">
-  <!-- Header -->
-  <header class="sticky top-0 z-20 glass px-4 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <span class="text-2xl">🧠</span>
-      <div>
-        <h1 class="text-sm font-bold gradient-text">GENIUS</h1>
-        <p class="text-[10px] text-gray-500" id="mode">loading...</p>
+<body>
+  <!-- ═══ MONEY TAB ═══ -->
+  <div class="page on" id="p-money">
+    <div class="status-bar">
+      <div class="dot live" id="status-dot"></div>
+      <span class="cap" id="status-text">LIVE</span>
+      <span style="flex:1"></span>
+      <span class="cap mono" id="uptime"></span>
+    </div>
+
+    <div class="card hero">
+      <div class="lbl" style="margin-bottom:6px">Portfolio</div>
+      <div class="hero-amount mono" id="balance">$0.00</div>
+      <div class="hero-sub">
+        <span id="lifetime-pnl" class="mono" style="font-weight:600">+$0.00 all-time</span>
+      </div>
+      <div style="display:flex;justify-content:center;gap:16px;margin-top:10px">
+        <span class="cap">Peak: <span class="mono" id="peak-bal">$0</span></span>
+        <span class="cap">Drawdown: <span class="mono" id="drawdown">0%</span></span>
       </div>
     </div>
-    <div class="flex items-center gap-2">
-      <div class="w-2 h-2 rounded-full bg-green-400 pulse-dot" id="status-dot"></div>
-      <span class="text-xs text-gray-400" id="last-update">—</span>
+
+    <!-- Today's PnL -->
+    <div class="stats stats-3" style="margin-bottom:12px">
+      <div class="card stat">
+        <div class="stat-val mono" id="today-pnl" style="color:var(--dim)">$0.00</div>
+        <div class="stat-lbl">Today</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-val" style="color:var(--green)"><span class="mono" id="today-wins">0</span> <span style="font-size:11px;font-weight:400">($<span class="mono" id="today-win-amt">0</span>)</span></div>
+        <div class="stat-lbl">Wins</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-val" style="color:var(--red)"><span class="mono" id="today-losses">0</span> <span style="font-size:11px;font-weight:400">($<span class="mono" id="today-loss-amt">0</span>)</span></div>
+        <div class="stat-lbl">Losses</div>
+      </div>
     </div>
-  </header>
 
-  <main class="px-4 pt-4 space-y-4 max-w-xl mx-auto">
+    <!-- Equity Curve -->
+    <div class="card chart-wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span class="lbl">Equity Curve</span>
+        <button style="background:none;color:var(--accent);font-size:12px;font-weight:600" onclick="toggleChartExpand()">Expand</button>
+      </div>
+      <div class="chart-pills" id="chart-pills">
+        <button class="pill" onclick="setRange('1h')">1H</button>
+        <button class="pill on" onclick="setRange('1d')">1D</button>
+        <button class="pill" onclick="setRange('7d')">7D</button>
+        <button class="pill" onclick="setRange('30d')">30D</button>
+      </div>
+      <div class="chart-box" id="equity-box">
+        <canvas id="equity-canvas"></canvas>
+      </div>
+    </div>
 
-    <!-- HERO: Bankroll -->
-    <section class="glass rounded-3xl p-6 text-center">
-      <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Current Bankroll</p>
-      <h2 class="text-5xl font-bold gradient-text num-transition" id="bankroll">$—</h2>
-      <div class="flex justify-center gap-4 mt-3 text-sm">
+    <!-- Growth Target -->
+    <div class="card" style="padding:14px;margin-bottom:12px" id="growth-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span class="lbl">Daily Growth Target</span>
+        <span class="mono" style="font-size:14px;font-weight:700" id="gt-pct">+50%</span>
+      </div>
+      <div class="target-bar"><div class="target-fill" id="gt-fill" style="width:0%;background:var(--green)"></div></div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px">
+        <span class="cap" id="gt-today">Today: 1.00x</span>
+        <span class="cap" id="gt-hits">Hit rate: --</span>
+        <span class="cap" id="gt-streak">Streak: 0</span>
+      </div>
+    </div>
+
+    <!-- Asset Performance -->
+    <div class="card" style="padding:14px;margin-bottom:12px">
+      <div class="lbl" style="margin-bottom:8px">Performance by Asset</div>
+      <div id="asset-bars"></div>
+    </div>
+
+    <!-- Live Feed -->
+    <div class="card" style="padding:14px;margin-bottom:12px">
+      <div class="lbl" style="margin-bottom:6px">Activity</div>
+      <div id="live-feed" style="max-height:120px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <!-- ═══ TRADES TAB ═══ -->
+  <div class="page" id="p-trades">
+    <div class="lbl" style="padding:12px 0 8px">Active Positions</div>
+    <div id="active-positions">
+      <div class="card" style="padding:20px;text-align:center"><span class="cap">No active positions</span></div>
+    </div>
+
+    <div class="lbl" style="padding:16px 0 8px">Recent Trades</div>
+    <div class="card" style="padding:0 14px" id="recent-trades">
+      <div class="cap" style="padding:20px 0;text-align:center">Loading...</div>
+    </div>
+
+    <!-- Turbo Stats -->
+    <div class="lbl" style="padding:16px 0 8px">Turbo Brain</div>
+    <div class="stats stats-2">
+      <div class="card stat">
+        <div class="stat-val mono" id="turbo-wr">--</div>
+        <div class="stat-lbl">Win Rate</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-val mono" id="turbo-pnl">$0</div>
+        <div class="stat-lbl">Total PnL</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-top:8px">
+      <div class="lbl" style="margin-bottom:6px">By Exit Type</div>
+      <div id="exit-breakdown"></div>
+    </div>
+  </div>
+
+  <!-- ═══ CONTROLS TAB ═══ -->
+  <div class="page" id="p-controls">
+    <div class="lbl" style="padding:12px 0 8px">Bot Controls</div>
+    <div class="card" style="padding:0 14px">
+      <div class="ctrl-row">
+        <span>Trading Active</span>
+        <button class="switch on" id="pause-switch" onclick="toggleBot()"></button>
+      </div>
+      <div class="ctrl-row">
+        <span>Live Mode</span>
+        <button class="switch" id="live-switch" onclick="toggleMode()"></button>
+      </div>
+      <div class="ctrl-row">
+        <span>Turbo Only</span>
+        <button class="switch on" id="turbo-switch" onclick="toggleTurboMode()"></button>
+      </div>
+    </div>
+
+    <div class="lbl" style="padding:16px 0 8px">Strategies</div>
+    <div class="card" style="padding:0 14px" id="strategy-toggles"></div>
+
+    <div class="lbl" style="padding:16px 0 8px">Risk</div>
+    <div class="card" style="padding:14px">
+      <button id="btn-snooze-loss" style="width:100%;padding:12px;border-radius:10px;background:rgba(255,255,255,0.06);color:var(--text);font-size:14px;font-weight:500" onclick="toggleDailyLossSnooze()">Snooze Loss Limit (24h)</button>
+    </div>
+
+    <div class="lbl" style="padding:16px 0 8px">Kalshi Balance</div>
+    <div class="card" style="padding:14px;text-align:center">
+      <div class="mono" style="font-size:28px;font-weight:700" id="kalshi-bal">$--</div>
+      <div class="cap" id="bal-error" style="display:none;color:var(--red);margin-top:4px"></div>
+      <button style="margin-top:8px;background:var(--accent);color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;font-weight:600" onclick="refreshBal()">Refresh</button>
+    </div>
+  </div>
+
+  <!-- ═══ CHAT TAB ═══ -->
+  <div class="page" id="p-chat">
+    <div class="chat-wrap">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-bubble bot">Hey! I'm your trading assistant. Ask me anything about the bot, positions, or strategy.</div>
+      </div>
+      <div class="chat-input-wrap">
+        <textarea id="chat-input" rows="1" placeholder="Ask anything..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+        <button class="chat-send" id="chat-send" onclick="sendChat()">&#x2191;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Position Detail Sheet -->
+  <div class="sheet-overlay" id="sheet-overlay" onclick="if(event.target===this)closeSheet()">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div>
-          <span id="today-pnl" class="font-semibold">—</span>
-          <span class="text-gray-500 text-xs ml-1">today</span>
+          <div style="font-size:18px;font-weight:700" id="sheet-ticker">--</div>
+          <span class="pos-badge" id="sheet-side">--</span>
         </div>
-        <div class="w-px bg-gray-700"></div>
-        <div>
-          <span id="total-return" class="font-semibold">—</span>
-          <span class="text-gray-500 text-xs ml-1">all-time</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Quick Stats -->
-    <section class="grid grid-cols-3 gap-3">
-      <div class="glass rounded-2xl p-3 text-center">
-        <p class="text-2xl font-bold" id="trades-today">—</p>
-        <p class="text-[10px] text-gray-500 uppercase">Trades</p>
-      </div>
-      <div class="glass rounded-2xl p-3 text-center">
-        <p class="text-2xl font-bold text-green-400" id="win-rate">—</p>
-        <p class="text-[10px] text-gray-500 uppercase">Win Rate</p>
-      </div>
-      <div class="glass rounded-2xl p-3 text-center">
-        <p class="text-2xl font-bold text-blue-400" id="open-positions">—</p>
-        <p class="text-[10px] text-gray-500 uppercase">Open</p>
-      </div>
-    </section>
-
-    <!-- Current Regime -->
-    <section class="glass rounded-2xl p-4">
-      <div class="flex items-center justify-between mb-2">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Market Regime</p>
-        <span class="text-[10px] text-gray-500" id="regime-updated">—</span>
-      </div>
-      <div class="flex items-center justify-between">
-        <div>
-          <p class="text-lg font-bold" id="regime-name">—</p>
-          <p class="text-xs text-gray-500" id="regime-conf">—</p>
-        </div>
-        <div class="text-right">
-          <p class="text-sm text-blue-400 font-bold" id="regime-aggression">—</p>
-          <p class="text-[10px] text-gray-500">aggression</p>
+        <div style="text-align:right">
+          <div class="mono" style="font-size:24px;font-weight:700" id="sheet-pnl">$0.00</div>
+          <span class="cap" id="sheet-time-left">--</span>
         </div>
       </div>
-      <p class="text-[10px] text-gray-500 mt-2" id="regime-rec">—</p>
-    </section>
+      <div class="sheet-chart">
+        <canvas id="sheet-canvas"></canvas>
+      </div>
+      <div class="stats stats-3" style="margin-top:12px">
+        <div class="card stat"><div class="stat-val mono" id="sheet-entry">--</div><div class="stat-lbl">Entry</div></div>
+        <div class="card stat"><div class="stat-val mono" id="sheet-current">--</div><div class="stat-lbl">Current</div></div>
+        <div class="card stat"><div class="stat-val mono" id="sheet-contracts">--</div><div class="stat-lbl">Contracts</div></div>
+      </div>
+      <button onclick="closeSheet()" style="width:100%;margin-top:12px;padding:14px;border-radius:12px;background:rgba(255,255,255,0.08);color:var(--text);font-size:15px;font-weight:600">Close</button>
+    </div>
+  </div>
 
-    <!-- Strategy Weights -->
-    <section class="glass rounded-2xl p-4">
-      <div class="flex items-center justify-between mb-3">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Strategy Weights</p>
-        <span class="text-[10px] text-gray-500">bayesian</span>
+  <!-- Live confirm overlay -->
+  <div class="confirm-overlay" id="live-confirm-overlay">
+    <div class="confirm-box">
+      <div id="live-step2">
+        <div style="font-size:16px;font-weight:600;text-align:center;margin-bottom:4px">Switch to LIVE Trading</div>
+        <div class="cap" style="text-align:center">Type <strong style="color:var(--red)">LIVE</strong> to confirm</div>
+        <input id="live-confirm-input" type="text" placeholder="Type LIVE" autocomplete="off">
+        <button class="confirm-btn" style="background:var(--red);color:#fff" onclick="checkLiveInput()">Confirm</button>
+        <button class="confirm-btn" style="background:rgba(255,255,255,0.08);color:var(--text)" onclick="cancelLiveConfirm()">Cancel</button>
       </div>
-      <div class="space-y-2" id="strategy-weights">
-        <div class="h-4 rounded shimmer"></div>
-        <div class="h-4 rounded shimmer"></div>
-        <div class="h-4 rounded shimmer"></div>
+      <div id="live-step3" style="display:none">
+        <div style="font-size:16px;font-weight:600;text-align:center;margin-bottom:8px">Final Check</div>
+        <div id="live-summary-details" class="cap" style="line-height:1.6;margin-bottom:12px"></div>
+        <button class="confirm-btn" style="background:var(--red);color:#fff" onclick="executeLiveSwitch()">GO LIVE</button>
+        <button class="confirm-btn" style="background:rgba(255,255,255,0.08);color:var(--text)" onclick="cancelLiveConfirm()">Cancel</button>
       </div>
-    </section>
+    </div>
+  </div>
 
-    <!-- Recent Trades -->
-    <section class="glass rounded-2xl p-4">
-      <div class="flex items-center justify-between mb-3">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider">Recent Trades</p>
-        <span class="text-[10px] text-gray-500" id="trade-count">—</span>
-      </div>
-      <div class="space-y-2 max-h-96 overflow-y-auto" id="trades-feed">
-        <div class="h-10 rounded shimmer"></div>
-        <div class="h-10 rounded shimmer"></div>
-        <div class="h-10 rounded shimmer"></div>
-      </div>
-    </section>
-
-    <!-- Latest Council Verdict -->
-    <section class="glass rounded-2xl p-4">
-      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">⚖️ Latest Council Verdict</p>
-      <div id="latest-verdict">
-        <div class="h-20 rounded shimmer"></div>
-      </div>
-    </section>
-
-    <!-- Hypothesis Lab -->
-    <section class="glass rounded-2xl p-4">
-      <div class="flex items-center justify-between mb-3">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider">🔬 Validated Edges</p>
-        <span class="text-[10px] text-gray-500" id="lab-total">—</span>
-      </div>
-      <div class="space-y-2" id="hypotheses">
-        <div class="h-8 rounded shimmer"></div>
-        <div class="h-8 rounded shimmer"></div>
-      </div>
-    </section>
-
-    <!-- Genetics -->
-    <section class="glass rounded-2xl p-4">
-      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">🧬 Strategy Genetics</p>
-      <div class="grid grid-cols-4 gap-2 text-center">
-        <div>
-          <p class="text-xl font-bold text-green-400" id="gen-active">—</p>
-          <p class="text-[9px] text-gray-500 uppercase">Active</p>
-        </div>
-        <div>
-          <p class="text-xl font-bold text-yellow-400" id="gen-testing">—</p>
-          <p class="text-[9px] text-gray-500 uppercase">Testing</p>
-        </div>
-        <div>
-          <p class="text-xl font-bold text-gray-400" id="gen-archived">—</p>
-          <p class="text-[9px] text-gray-500 uppercase">Archived</p>
-        </div>
-        <div>
-          <p class="text-xl font-bold text-purple-400" id="gen-generations">—</p>
-          <p class="text-[9px] text-gray-500 uppercase">Gen</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Calibration & Evolution -->
-    <section class="grid grid-cols-2 gap-3">
-      <div class="glass rounded-2xl p-4">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-2">🎯 Calibration</p>
-        <p class="text-2xl font-bold" id="brier">—</p>
-        <p class="text-[10px] text-gray-500">Brier score</p>
-        <p class="text-[10px] mt-1" id="cal-bias">—</p>
-      </div>
-      <div class="glass rounded-2xl p-4">
-        <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-2">🔄 Evolution</p>
-        <p class="text-2xl font-bold" id="evo-cycles">—</p>
-        <p class="text-[10px] text-gray-500">cycles run</p>
-        <p class="text-[10px] mt-1 text-gray-400"><span id="evo-patterns">0</span> patterns · <span id="evo-prompts">0</span> prompts</p>
-      </div>
-    </section>
-
-    <!-- Controls -->
-    <section class="glass rounded-2xl p-4">
-      <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Controls</p>
-      <div class="grid grid-cols-2 gap-3">
-        <button onclick="toggleBot()" class="bg-white/10 hover:bg-white/20 rounded-xl py-3 text-sm font-semibold" id="pause-btn">⏸ Pause</button>
-        <button onclick="refresh()" class="bg-white/10 hover:bg-white/20 rounded-xl py-3 text-sm font-semibold">🔄 Refresh</button>
-      </div>
-    </section>
-
-    <!-- Footer -->
-    <footer class="text-center text-[10px] text-gray-600 pt-4">
-      <p>Polymarket Genius v5 · 4-layer cognitive architecture</p>
-      <p id="uptime" class="mt-1">—</p>
-    </footer>
-  </main>
+  <!-- Tab Bar -->
+  <div class="tabs">
+    <button class="tab on" onclick="switchTab('money')">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.95.49-7.4-2.97-6.93-6.93.34-2.89 2.7-5.24 5.58-5.58 3.95-.49 7.4 2.97 6.93 6.93-.34 2.89-2.7 5.24-5.58 5.58zM12 7c-.55 0-1 .45-1 1v3.59c0 .53.21 1.04.59 1.41l2.12 2.12a1 1 0 001.41-1.41l-2.12-2.12V8c0-.55-.45-1-1-1z"/></svg>
+      Money
+    </button>
+    <button class="tab" onclick="switchTab('trades')">
+      <svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+      Trades
+    </button>
+    <button class="tab" onclick="switchTab('controls')">
+      <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></svg>
+      Controls
+    </button>
+    <button class="tab" onclick="switchTab('chat')">
+      <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+      Chat
+    </button>
+  </div>
 
   <script>
-    let lastBankroll = null;
-    let paused = false;
+    // ═══ STATE ═══
+    let snap = {};
+    let equityData = [];
+    let chartRange = '1d';
+    let chartExpanded = false;
+    let currentTab = 'money';
+    let chatHistory = [];
+    let chatBusy = false;
+    let turboOnlyMode = true;
+    let dailyLossSnoozed = false;
+    let evtSource = null;
 
-    async function fetchSnapshot() {
-      try {
-        const res = await fetch('/api/snapshot');
-        if (!res.ok) throw new Error('API error');
-        const data = await res.json();
-        render(data);
-        document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-green-400 pulse-dot';
-        document.getElementById('last-update').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-      } catch (e) {
-        document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-red-500 pulse-dot';
-        document.getElementById('last-update').textContent = 'offline';
-      }
+    // ═══ SSE CONNECTION ═══
+    function connectSSE() {
+      if (evtSource) evtSource.close();
+      evtSource = new EventSource('/api/events');
+      evtSource.onmessage = (e) => {
+        try { snap = JSON.parse(e.data); render(); } catch {}
+      };
+      evtSource.onerror = () => {
+        evtSource.close();
+        setTimeout(connectSSE, 5000);
+      };
     }
 
-    function render(d) {
-      // Mode
-      document.getElementById('mode').textContent = `${d.mode} · ${d.phase}`;
-
-      // Bankroll (with flash on change)
-      const bankrollEl = document.getElementById('bankroll');
-      bankrollEl.textContent = `$${d.bankroll.toFixed(2)}`;
-      if (lastBankroll !== null && d.bankroll !== lastBankroll) {
-        bankrollEl.style.color = d.bankroll > lastBankroll ? '#34d399' : '#f87171';
-        setTimeout(() => bankrollEl.style.color = '', 800);
-      }
-      lastBankroll = d.bankroll;
-
-      // Today P&L
-      const pnlEl = document.getElementById('today-pnl');
-      const sign = d.today_pnl >= 0 ? '+' : '';
-      pnlEl.textContent = `${sign}$${d.today_pnl.toFixed(2)}`;
-      pnlEl.className = `font-semibold ${d.today_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`;
-
-      // Total return
-      const totalEl = document.getElementById('total-return');
-      const totalSign = d.total_return_pct >= 0 ? '+' : '';
-      totalEl.textContent = `${totalSign}${d.total_return_pct.toFixed(1)}%`;
-      totalEl.className = `font-semibold ${d.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`;
-
-      // Quick stats
-      document.getElementById('trades-today').textContent = d.trades_today;
-      document.getElementById('win-rate').textContent = d.win_rate === null ? '—' : `${(d.win_rate * 100).toFixed(0)}%`;
-      document.getElementById('open-positions').textContent = d.open_positions;
-
-      // Regime
-      const regimeColors = {
-        QUIET: 'text-blue-400', TRENDING_UP: 'text-green-400', TRENDING_DOWN: 'text-red-400',
-        VOLATILE: 'text-yellow-400', NEWS_DRIVEN: 'text-purple-400', DEAD: 'text-gray-500'
-      };
-      const regimeEl = document.getElementById('regime-name');
-      regimeEl.textContent = d.regime.name;
-      regimeEl.className = `text-lg font-bold ${regimeColors[d.regime.name] || 'text-gray-400'}`;
-      document.getElementById('regime-conf').textContent = `${(d.regime.confidence * 100).toFixed(0)}% confidence`;
-      document.getElementById('regime-aggression').textContent = `${d.regime.aggression.toFixed(2)}x`;
-      document.getElementById('regime-rec').textContent = `favored: ${d.regime.recommended.join(', ')}`;
-
-      // Strategy weights
-      const weightsEl = document.getElementById('strategy-weights');
-      const strategyEmoji = {
-        cycle_sniper: '⚡', negrisk_arb: '🛡️', mispricing: '🧠',
-        cross_correlation: '🔗', whale_consensus: '🐋', market_making: '💱'
-      };
-      weightsEl.innerHTML = d.weights.map(w => {
-        const pct = Math.min(100, w.weight * 66.67); // 1.0 = 66%, 1.5 = 100%
-        const statusColor = { hot: '#f59e0b', warm: '#60a5fa', cold: '#6b7280', frozen: '#ef4444' }[w.status] || '#60a5fa';
-        const statusEmoji = { hot: '🔥', warm: '', cold: '❄️', frozen: '🧊' }[w.status] || '';
-        return `
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-xs font-medium">${strategyEmoji[w.strategy] || '📊'} ${w.strategy.replace(/_/g, ' ')} ${statusEmoji}</span>
-              <span class="text-[10px] text-gray-500">${w.weight.toFixed(2)} · ${(w.win_rate * 100).toFixed(0)}% · ${w.trades}t</span>
-            </div>
-            <div class="h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div class="h-full rounded-full transition-all duration-500" style="width: ${pct}%; background: ${statusColor};"></div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      // Trades feed
-      const tradesEl = document.getElementById('trades-feed');
-      document.getElementById('trade-count').textContent = `${d.trades.length} recent`;
-      tradesEl.innerHTML = d.trades.length === 0 
-        ? '<p class="text-center text-gray-500 text-xs py-4">No trades yet</p>'
-        : d.trades.map(t => {
-          const icon = t.won ? '✅' : '❌';
-          const strategy = strategyEmoji[t.strategy] || '📊';
-          const pnlClass = t.pnl >= 0 ? 'text-green-400' : 'text-red-400';
-          const pnlSign = t.pnl >= 0 ? '+' : '';
-          const time = new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-          return `
-            <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-              <div class="flex items-center gap-2 flex-1 min-w-0">
-                <span>${icon}</span>
-                <span class="text-xs">${strategy}</span>
-                <span class="text-xs font-semibold ${t.direction === 'YES' ? 'text-green-400' : 'text-red-400'}">${t.direction}</span>
-                <span class="text-xs text-gray-400 truncate">${t.question.slice(0, 28)}...</span>
-              </div>
-              <div class="text-right ml-2">
-                <p class="text-xs font-semibold ${pnlClass}">${pnlSign}$${t.pnl.toFixed(2)}</p>
-                <p class="text-[9px] text-gray-500">${time}</p>
-              </div>
-            </div>
-          `;
-        }).join('');
-
-      // Latest verdict
-      const verdictEl = document.getElementById('latest-verdict');
-      if (d.latest_verdict) {
-        const v = d.latest_verdict;
-        const verdictColor = { TAKE: 'text-green-400', PASS: 'text-gray-400', REVERSE: 'text-yellow-400' }[v.verdict] || 'text-gray-400';
-        verdictEl.innerHTML = `
-          <div class="space-y-2">
-            <p class="text-xs text-gray-300 font-medium line-clamp-2">${v.question}</p>
-            <div class="flex items-center gap-3 text-xs">
-              <span class="${verdictColor} font-bold">${v.verdict}</span>
-              <span class="text-gray-500">${v.direction}</span>
-              <span class="text-blue-400">agree ${(v.agreement * 100).toFixed(0)}%</span>
-              <span class="text-purple-400">edge ${(v.edge * 100).toFixed(1)}%</span>
-            </div>
-            <p class="text-[10px] text-gray-500 italic">crux: ${v.crux ? v.crux.slice(0, 120) : '—'}</p>
-          </div>
-        `;
-      } else {
-        verdictEl.innerHTML = '<p class="text-xs text-gray-500 text-center py-2">No council verdicts yet</p>';
-      }
-
-      // Hypothesis lab
-      document.getElementById('lab-total').textContent = `${d.lab.total} total`;
-      const hypEl = document.getElementById('hypotheses');
-      if (d.lab.top_edges.length === 0) {
-        hypEl.innerHTML = '<p class="text-center text-gray-500 text-xs py-2">Gathering evidence...</p>';
-      } else {
-        hypEl.innerHTML = d.lab.top_edges.map(e => `
-          <div class="flex items-center justify-between">
-            <span class="text-xs truncate flex-1">${e.name.replace(/_/g, ' ')}</span>
-            <div class="flex items-center gap-2 text-[10px]">
-              <span class="text-green-400 font-semibold">${(e.rate * 100).toFixed(0)}%</span>
-              <span class="text-gray-500">n=${e.trials}</span>
-              <span class="text-purple-400">p=${e.p.toFixed(3)}</span>
-            </div>
-          </div>
-        `).join('');
-      }
-
-      // Genetics
-      document.getElementById('gen-active').textContent = d.genetics.active;
-      document.getElementById('gen-testing').textContent = d.genetics.testing;
-      document.getElementById('gen-archived').textContent = d.genetics.archived;
-      document.getElementById('gen-generations').textContent = d.genetics.generations;
-
-      // Calibration
-      document.getElementById('brier').textContent = d.calibration.brier.toFixed(3);
-      const biasEl = document.getElementById('cal-bias');
-      if (d.calibration.overconfident) {
-        biasEl.textContent = '⚠️ overconfident';
-        biasEl.className = 'text-[10px] mt-1 text-yellow-400';
-      } else if (d.calibration.underconfident) {
-        biasEl.textContent = '⚠️ underconfident';
-        biasEl.className = 'text-[10px] mt-1 text-yellow-400';
-      } else {
-        biasEl.textContent = '✓ well calibrated';
-        biasEl.className = 'text-[10px] mt-1 text-green-400';
-      }
-
-      // Evolution
-      document.getElementById('evo-cycles').textContent = d.evolution.cycles;
-      document.getElementById('evo-patterns').textContent = d.evolution.patterns;
-      document.getElementById('evo-prompts').textContent = d.evolution.prompt_evolutions;
-
-      // Uptime
-      const uptimeMin = Math.floor(d.uptime_seconds / 60);
-      const uptimeH = Math.floor(uptimeMin / 60);
-      const uptimeD = Math.floor(uptimeH / 24);
-      let uptimeStr = '';
-      if (uptimeD > 0) uptimeStr = `${uptimeD}d ${uptimeH % 24}h ${uptimeMin % 60}m`;
-      else if (uptimeH > 0) uptimeStr = `${uptimeH}h ${uptimeMin % 60}m`;
-      else uptimeStr = `${uptimeMin}m`;
-      document.getElementById('uptime').textContent = `uptime: ${uptimeStr}`;
-    }
-
-    async function toggleBot() {
+    // Fallback polling
+    async function load() {
       try {
-        const res = await fetch('/api/toggle', { method: 'POST' });
-        const data = await res.json();
-        paused = data.paused;
-        document.getElementById('pause-btn').textContent = paused ? '▶ Resume' : '⏸ Pause';
+        const r = await fetch('/api/snapshot');
+        snap = await r.json();
+        render();
       } catch {}
     }
 
-    function refresh() { fetchSnapshot(); }
+    // ═══ TAB SWITCHING ═══
+    function switchTab(t) {
+      currentTab = t;
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+      document.getElementById('p-' + t).classList.add('on');
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('on'));
+      event.currentTarget.classList.add('on');
+      if (t === 'money') fetchEquity();
+      if (t === 'controls') refreshBal();
+    }
 
-    // Initial fetch + poll every 10 seconds
-    fetchSnapshot();
-    setInterval(fetchSnapshot, 10000);
+    // ═══ EQUITY CHART ═══
+    async function fetchEquity() {
+      try {
+        const r = await fetch('/api/equity-history?range=' + chartRange);
+        equityData = await r.json();
+        drawEquity();
+      } catch {}
+    }
 
-    // Handle page visibility - pause polling when hidden to save battery
-    let pollInterval = 10000;
-    document.addEventListener('visibilitychange', () => {
-      pollInterval = document.hidden ? 60000 : 10000;
-    });
+    function setRange(r) {
+      chartRange = r;
+      document.querySelectorAll('.pill').forEach(p => p.classList.remove('on'));
+      event.currentTarget.classList.add('on');
+      fetchEquity();
+    }
+
+    function toggleChartExpand() {
+      chartExpanded = !chartExpanded;
+      document.getElementById('equity-box').classList.toggle('expanded', chartExpanded);
+      setTimeout(drawEquity, 50);
+    }
+
+    function drawEquity() {
+      const canvas = document.getElementById('equity-canvas');
+      if (!canvas) return;
+      const data = equityData.length > 1 ? equityData.map(p => p.bankroll) : (snap.bankroll ? [snap.bankroll, snap.bankroll] : [0]);
+      if (data.length < 2) return;
+
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      const W = rect.width, H = rect.height;
+
+      const min = Math.min(...data) * 0.97;
+      const max = Math.max(...data) * 1.03;
+      const range = max - min || 1;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Area fill
+      const isUp = data[data.length - 1] >= data[0];
+      const lineColor = isUp ? '#30d158' : '#ff453a';
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, isUp ? 'rgba(48,209,88,0.12)' : 'rgba(255,69,58,0.12)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      data.forEach((v, i) => {
+        const x = (i / (data.length - 1)) * W;
+        const y = H - ((v - min) / range) * H;
+        ctx.lineTo(x, y);
+      });
+      ctx.lineTo(W, H);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Line
+      ctx.beginPath();
+      data.forEach((v, i) => {
+        const x = (i / (data.length - 1)) * W;
+        const y = H - ((v - min) / range) * H;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Current value label
+      const lastY = H - ((data[data.length - 1] - min) / range) * H;
+      ctx.fillStyle = lineColor;
+      ctx.font = '600 11px -apple-system, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('$' + data[data.length - 1].toFixed(2), W - 4, Math.max(14, lastY - 6));
+    }
+
+    // ═══ SPARKLINE ═══
+    function drawSparkline(canvas, data, color) {
+      if (!canvas || data.length < 2) return;
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const W = canvas.offsetWidth, H = canvas.offsetHeight;
+      canvas.width = W * dpr; canvas.height = H * dpr;
+      ctx.scale(dpr, dpr);
+      const min = Math.min(...data), max = Math.max(...data);
+      const range = max - min || 1;
+      ctx.beginPath();
+      data.forEach((v, i) => {
+        const x = (i / (data.length - 1)) * W;
+        const y = H - ((v - min) / range) * H;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // ═══ POSITION DETAIL SHEET ═══
+    async function openSheet(ticker, side, entryPrice, contracts, pnl) {
+      const sheet = document.getElementById('sheet-overlay');
+      document.getElementById('sheet-ticker').textContent = ticker.replace(/KXBTC15M|KXETH15M|KXSOL15M|KXXRP15M/, m => m.slice(2, -3));
+      const sideEl = document.getElementById('sheet-side');
+      sideEl.textContent = side; sideEl.className = 'pos-badge ' + side.toLowerCase();
+      document.getElementById('sheet-pnl').textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2);
+      document.getElementById('sheet-pnl').style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      document.getElementById('sheet-entry').textContent = entryPrice + '\u00A2';
+      document.getElementById('sheet-contracts').textContent = contracts;
+      sheet.classList.add('on');
+
+      // Fetch price feed for the underlying asset
+      const asset = ticker.includes('BTC') ? 'btcusdt' : ticker.includes('ETH') ? 'ethusdt' : ticker.includes('SOL') ? 'solusdt' : 'xrpusdt';
+      try {
+        const r = await fetch('/api/price-feed?symbol=' + asset);
+        const prices = await r.json();
+        if (prices.length > 1) {
+          drawSheetChart(prices.map(p => p.price), entryPrice);
+          document.getElementById('sheet-current').textContent = '$' + prices[prices.length - 1].price.toFixed(prices[prices.length-1].price > 100 ? 0 : 2);
+        }
+      } catch {}
+    }
+
+    function drawSheetChart(data, entryRefPrice) {
+      const canvas = document.getElementById('sheet-canvas');
+      if (!canvas || data.length < 2) return;
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      const W = rect.width, H = rect.height;
+      const min = Math.min(...data) * 0.9998;
+      const max = Math.max(...data) * 1.0002;
+      const range = max - min || 1;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Price line
+      const isUp = data[data.length - 1] >= data[0];
+      ctx.beginPath();
+      data.forEach((v, i) => {
+        const x = (i / (data.length - 1)) * W;
+        const y = H - ((v - min) / range) * H;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = isUp ? '#30d158' : '#ff453a';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Area
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, isUp ? 'rgba(48,209,88,0.1)' : 'rgba(255,69,58,0.1)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+
+      // Labels
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '500 10px -apple-system, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('$' + data[0].toFixed(data[0] > 100 ? 0 : 2), 4, 14);
+      ctx.textAlign = 'right';
+      const lastPrice = data[data.length - 1];
+      ctx.fillStyle = isUp ? '#30d158' : '#ff453a';
+      ctx.font = '600 12px -apple-system, sans-serif';
+      ctx.fillText('$' + lastPrice.toFixed(lastPrice > 100 ? 0 : 2), W - 4, H - 8);
+    }
+
+    function closeSheet() {
+      document.getElementById('sheet-overlay').classList.remove('on');
+    }
+
+    // ═══ MAIN RENDER ═══
+    function render() {
+      if (!snap || !snap.bankroll) return;
+      const d = snap;
+      const f = d.financial || {};
+      const lt = f.lifetime || {};
+      const td = f.today || {};
+
+      // Status
+      const dot = document.getElementById('status-dot');
+      dot.className = 'dot ' + (d.mode === 'LIVE' ? 'live' : 'paper');
+      document.getElementById('status-text').textContent = (d.mode === 'LIVE' ? 'LIVE' : 'PAPER') + (d.paused ? ' (PAUSED)' : '');
+      const um = Math.floor((d.uptime_seconds || 0) / 60);
+      document.getElementById('uptime').textContent = Math.floor(um / 60) + 'h ' + (um % 60) + 'm';
+
+      // Hero
+      document.getElementById('balance').textContent = '$' + d.bankroll.toFixed(2);
+      const lifePnl = lt.pnl || 0;
+      const pnlEl = document.getElementById('lifetime-pnl');
+      pnlEl.textContent = (lifePnl >= 0 ? '+' : '') + '$' + Math.abs(lifePnl).toFixed(2) + ' all-time';
+      pnlEl.style.color = lifePnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const peak = f.peak_balance || d.bankroll;
+      document.getElementById('peak-bal').textContent = '$' + peak.toFixed(2);
+      const dd = peak > 0 ? ((peak - d.bankroll) / peak * 100) : 0;
+      const ddEl = document.getElementById('drawdown');
+      ddEl.textContent = dd > 0 ? '-' + dd.toFixed(1) + '%' : '0%';
+      ddEl.style.color = dd > 5 ? 'var(--red)' : 'var(--dim)';
+
+      // Today stats
+      const todayPnl = td.pnl || 0;
+      const tpEl = document.getElementById('today-pnl');
+      tpEl.textContent = (todayPnl >= 0 ? '+' : '') + '$' + Math.abs(todayPnl).toFixed(2);
+      tpEl.style.color = todayPnl >= 0 ? 'var(--green)' : 'var(--red)';
+      document.getElementById('today-wins').textContent = td.wins || 0;
+      document.getElementById('today-win-amt').textContent = Math.abs(td.win_amount || 0).toFixed(0);
+      document.getElementById('today-losses').textContent = td.losses || 0;
+      document.getElementById('today-loss-amt').textContent = Math.abs(td.loss_amount || 0).toFixed(0);
+
+      // Growth target
+      const gt = d.growth_target || {};
+      document.getElementById('gt-pct').textContent = '+' + (gt.daily_target_pct || 50).toFixed(0) + '%';
+      const prog = Math.min(100, Math.max(0, gt.progress_pct || 0));
+      const fill = document.getElementById('gt-fill');
+      fill.style.width = prog + '%';
+      fill.style.background = prog >= 100 ? 'var(--green)' : prog >= 50 ? 'var(--orange)' : 'var(--red)';
+      document.getElementById('gt-today').textContent = 'Today: ' + (gt.today_mult || 1).toFixed(2) + 'x';
+      document.getElementById('gt-hits').textContent = 'Hit rate: ' + (gt.days_tracked > 0 ? (gt.hit_rate * 100).toFixed(0) + '%' : '--');
+      document.getElementById('gt-streak').textContent = 'Streak: ' + (gt.consecutive_hits || 0);
+
+      // Asset bars
+      const assets = f.by_asset || [];
+      const maxAbsPnl = Math.max(1, ...assets.map(a => Math.abs(a.pnl)));
+      document.getElementById('asset-bars').innerHTML = assets.map(a => {
+        const pct = Math.abs(a.pnl) / maxAbsPnl * 100;
+        const wr = a.trades > 0 ? (a.wins / a.trades * 100).toFixed(0) : 0;
+        const color = a.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        return `<div class="flow-row">
+          <span class="flow-asset">${a.asset}</span>
+          <div class="flow-bar"><div class="flow-fill" style="width:${pct}%;background:${color};${a.pnl < 0 ? 'right:0' : 'left:0'}"></div></div>
+          <span class="flow-num mono" style="color:${color}">${a.pnl >= 0 ? '+' : ''}$${Math.abs(a.pnl).toFixed(0)}</span>
+          <span class="cap" style="width:40px;text-align:right">${wr}%</span>
+        </div>`;
+      }).join('');
+
+      // Active positions
+      const positions = d.open_position_details || [];
+      if (positions.length === 0) {
+        document.getElementById('active-positions').innerHTML = '<div class="card" style="padding:20px;text-align:center"><span class="cap">No active positions</span></div>';
+      } else {
+        document.getElementById('active-positions').innerHTML = positions.map(p => {
+          const pnl = p.unrealized_pnl || 0;
+          const color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const asset = p.ticker.includes('BTC') ? 'BTC' : p.ticker.includes('ETH') ? 'ETH' : p.ticker.includes('SOL') ? 'SOL' : 'XRP';
+          return `<div class="card pos-card" onclick="openSheet('${p.ticker}','${p.side}',${p.entry_price},${p.contracts},${pnl})">
+            <div class="pos-header">
+              <div>
+                <span style="font-size:15px;font-weight:700">${asset} 15m</span>
+                <span class="pos-badge ${p.side.toLowerCase()}" style="margin-left:6px">${p.side}</span>
+              </div>
+              <span class="pos-pnl mono" style="color:${color}">${pnl >= 0 ? '+' : ''}$${Math.abs(pnl).toFixed(2)}</span>
+            </div>
+            <div class="pos-detail cap">
+              <span>${p.entry_price}c | ${p.contracts} contracts</span>
+              <span>${p.current_price ? p.current_price + 'c now' : ''}</span>
+            </div>
+          </div>`;
+        }).join('');
+      }
+
+      // Recent trades
+      const trades = d.trades || [];
+      if (trades.length > 0) {
+        document.getElementById('recent-trades').innerHTML = trades.slice(0, 12).map(t => {
+          const pnl = t.pnl || 0;
+          const time = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const asset = t.question?.includes('BTC') ? 'BTC' : t.question?.includes('ETH') ? 'ETH' : t.question?.includes('SOL') ? 'SOL' : 'XRP';
+          return `<div class="trade-row">
+            <div>
+              <span style="font-size:13px;font-weight:600">${asset}</span>
+              <span class="pos-badge ${t.direction.toLowerCase()}" style="margin-left:4px;font-size:10px">${t.direction}</span>
+              <span class="cap" style="margin-left:6px">${(t.price * 100).toFixed(0)}c</span>
+            </div>
+            <div style="text-align:right">
+              <span class="mono" style="font-size:13px;font-weight:600;color:${pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--dim)'}">${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}</span>
+              <div class="cap">${time}</div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+
+      // Turbo stats
+      const turbo = d.turbo || {};
+      if (turbo.total_trades > 0) {
+        document.getElementById('turbo-wr').textContent = (turbo.win_rate * 100).toFixed(0) + '%';
+        document.getElementById('turbo-wr').style.color = turbo.win_rate >= 0.54 ? 'var(--green)' : turbo.win_rate >= 0.45 ? 'var(--orange)' : 'var(--red)';
+        document.getElementById('turbo-pnl').textContent = (turbo.total_pnl >= 0 ? '+$' : '-$') + Math.abs(turbo.total_pnl).toFixed(2);
+        document.getElementById('turbo-pnl').style.color = turbo.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+
+      // Exit breakdown
+      const exits = f.by_exit || [];
+      document.getElementById('exit-breakdown').innerHTML = exits.filter(e => e.count > 1).map(e => {
+        const color = e.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        const name = e.status.replace(/_/g, ' ');
+        return `<div class="flow-row">
+          <span style="font-size:12px;flex:1">${name}</span>
+          <span class="mono cap" style="width:30px;text-align:center">${e.count}</span>
+          <span class="mono" style="font-size:12px;font-weight:600;color:${color};width:55px;text-align:right">${e.pnl >= 0 ? '+' : ''}$${Math.abs(e.pnl).toFixed(0)}</span>
+        </div>`;
+      }).join('');
+
+      // Controls
+      document.getElementById('pause-switch').className = 'switch' + (d.paused ? '' : ' on');
+      document.getElementById('live-switch').className = 'switch' + (d.mode === 'LIVE' ? ' on' : '');
+      if (d.config?.turbo_only !== undefined) { turboOnlyMode = d.config.turbo_only; document.getElementById('turbo-switch').className = 'switch' + (turboOnlyMode ? ' on' : ''); }
+      if (d.config?.daily_loss_snoozed !== undefined) { dailyLossSnoozed = d.config.daily_loss_snoozed; updateSnoozeButton(); }
+
+      // Strategy toggles
+      if (d.config?.strategies) {
+        const names = { cycle_sniper: 'Sniper', negrisk_arb: 'Arb', mispricing: 'AI Team', cross_correlation: 'Correlation', whale_consensus: 'Whales', market_maker: 'Market Making' };
+        document.getElementById('strategy-toggles').innerHTML = Object.entries(d.config.strategies).map(([k, v]) =>
+          `<div class="ctrl-row"><span style="font-size:14px">${names[k] || k}</span><button class="switch ${v ? 'on' : ''}" onclick="toggleStrat('${k}',${!v})"></button></div>`
+        ).join('');
+      }
+
+      // Activity feed
+      fetchActivity();
+    }
+
+    // ═══ ACTIONS ═══
+    async function toggleBot() {
+      const r = await fetch('/api/toggle', { method: 'POST' }); load();
+    }
+    async function toggleMode() {
+      const isLive = document.getElementById('live-switch').classList.contains('on');
+      if (isLive) { await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dry_run: true }) }); load(); }
+      else {
+        if (!confirm('Switch to LIVE trading with REAL MONEY?')) return;
+        document.getElementById('live-step2').style.display = '';
+        document.getElementById('live-step3').style.display = 'none';
+        document.getElementById('live-confirm-input').value = '';
+        document.getElementById('live-confirm-overlay').classList.add('show');
+      }
+    }
+    function cancelLiveConfirm() { document.getElementById('live-confirm-overlay').classList.remove('show'); }
+    function checkLiveInput() {
+      if (document.getElementById('live-confirm-input').value.trim() !== 'LIVE') return;
+      document.getElementById('live-step2').style.display = 'none';
+      document.getElementById('live-step3').style.display = '';
+      document.getElementById('live-summary-details').innerHTML = '<strong>Bankroll:</strong> $' + (snap.bankroll || 0).toFixed(2);
+    }
+    async function executeLiveSwitch() { cancelLiveConfirm(); await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dry_run: false }) }); load(); }
+    async function toggleStrat(k, v) { await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'STRATEGY_' + k.toUpperCase(), value: v }) }); load(); }
+    async function toggleTurboMode() {
+      const n = !turboOnlyMode;
+      if (!n && !confirm('Switch to ALL MARKETS?')) return;
+      await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'TURBO_ONLY_MODE', value: n }) });
+      turboOnlyMode = n; document.getElementById('turbo-switch').className = 'switch' + (n ? ' on' : '');
+    }
+    async function toggleDailyLossSnooze() {
+      const r = await fetch('/api/daily-loss-snooze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ snooze: !dailyLossSnoozed, hours: 24 }) });
+      const d = await r.json(); dailyLossSnoozed = d.snoozed; updateSnoozeButton();
+    }
+    function updateSnoozeButton() {
+      const btn = document.getElementById('btn-snooze-loss');
+      if (!btn) return;
+      btn.textContent = dailyLossSnoozed ? 'Loss Limit SNOOZED' : 'Snooze Loss Limit (24h)';
+      btn.style.color = dailyLossSnoozed ? 'var(--orange)' : 'var(--text)';
+    }
+    async function refreshBal() {
+      try {
+        const r = await fetch('/api/balance'); const d = await r.json();
+        document.getElementById('kalshi-bal').textContent = d.error ? '$--' : '$' + d.balance_usd.toFixed(2);
+        document.getElementById('kalshi-bal').style.color = d.error ? 'var(--dim)' : 'var(--green)';
+      } catch { document.getElementById('kalshi-bal').textContent = '$--'; }
+    }
+    async function fetchActivity() {
+      try {
+        const r = await fetch('/api/activity'); const data = await r.json();
+        const items = data.items || [];
+        if (items.length > 0) {
+          document.getElementById('live-feed').innerHTML = items.slice(-8).reverse().map(item => {
+            const time = new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return `<div class="feed-item"><span class="feed-time">${time}</span>${item.icon} ${item.text}</div>`;
+          }).join('');
+        }
+      } catch {}
+    }
+
+    // ═══ CHAT ═══
+    async function sendChat() {
+      const input = document.getElementById('chat-input');
+      const msg = input.value.trim();
+      if (!msg || chatBusy) return;
+      input.value = ''; chatBusy = true;
+      document.getElementById('chat-send').disabled = true;
+      appendBubble(msg, 'user');
+      chatHistory.push({ role: 'user', content: msg });
+      const typing = document.createElement('div');
+      typing.className = 'chat-typing'; typing.id = 'chat-typing'; typing.textContent = 'Thinking...';
+      document.getElementById('chat-messages').appendChild(typing);
+      scrollChat();
+      try {
+        const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: msg, history: chatHistory.slice(-10) }) });
+        const data = await r.json();
+        document.getElementById('chat-typing')?.remove();
+        if (data.error) appendBubble('Error: ' + data.error, 'bot');
+        else { appendBubble(data.response, 'bot', data.model); chatHistory.push({ role: 'assistant', content: data.response }); }
+        load();
+      } catch { document.getElementById('chat-typing')?.remove(); appendBubble('Connection error.', 'bot'); }
+      chatBusy = false; document.getElementById('chat-send').disabled = false;
+    }
+    function appendBubble(text, role, model) {
+      const el = document.createElement('div');
+      el.className = 'chat-bubble ' + role;
+      if (role === 'bot' && typeof marked !== 'undefined') {
+        marked.setOptions({ breaks: true, gfm: true });
+        let html = marked.parse(text);
+        if (model) html += `<div style="font-size:10px;color:var(--dim);margin-top:4px;text-align:right">claude ${model}</div>`;
+        el.innerHTML = html;
+      } else el.textContent = text;
+      document.getElementById('chat-messages').appendChild(el);
+      scrollChat();
+    }
+    function scrollChat() { const c = document.getElementById('chat-messages'); c.scrollTop = c.scrollHeight; }
+
+    // ═══ INIT ═══
+    load();
+    fetchEquity();
+    connectSSE();
+    // Fallback polling in case SSE drops
+    setInterval(() => { if (!evtSource || evtSource.readyState === 2) load(); }, 15000);
+    window.addEventListener('resize', drawEquity);
+    document.getElementById('chat-input')?.addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 100) + 'px'; });
   </script>
 </body>
 </html>

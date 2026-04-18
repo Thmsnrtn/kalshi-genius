@@ -1,19 +1,23 @@
-// src/index.ts — KALSHI EDITION
+// src/index.ts — KALSHI GENIUS V3: BEAST MODE
 //
 // COMPLETE ARCHITECTURE:
 //
-// Layer 1: STRATEGIES       (what to trade — Kalshi-native)
-// Layer 2: EVOLUTION        (learn what works)
-// Layer 3: GENIUS           (think deeply)
-// Layer 4: META             (self-critique)
-// Layer 5: ALPHA SOURCES    (information edge from news/whales/orderbook)
-// Layer 6: DASHBOARD        (phone-first monitoring)
+// Layer 1: STRATEGIES       (hourly sniper, monotonicity arb, economic, weather, cross-platform, market maker)
+// Layer 2: EVOLUTION        (learn what works — 5-scale feedback loops)
+// Layer 3: GENIUS           (think deeply — cognitive council with calibration)
+// Layer 4: META             (self-critique — prompt evolution, strategy genetics)
+// Layer 5: ALPHA SOURCES    (information edge — news, whales, orderbook, FRED, NWS, odds movement)
+// Layer 6: DASHBOARD        (phone-first monitoring with calibration view)
+// Layer 7: POSITION MGMT    (exits — take profit, stop loss, trailing stop, time exit)
+// Layer 8: RESOLUTION       (feedback loop — track outcomes, calibrate, milestones)
 
 import { config, getPhaseParams } from "./core/config.js";
-import { calculatePosition, canTrade, meetsEdgeThreshold } from "./core/risk.js";
-import { getDb, logTrade } from "./core/db.js";
-import { notifyStartup, notifyTrade } from "./core/notify.js";
+import { calculatePosition, canTrade, meetsEdgeThreshold, getExposure } from "./core/risk.js";
+import { getDb, logTrade, logRejectedSignal, openPosition, getOpenPositions, closePosition as dbClosePosition, logMilestone, getCalibrationData, getCouncilAttribution, getMilestones, getCachedVerdict, setCachedVerdict, cleanExpiredCache, getBotState, setBotState as dbSetBotState } from "./core/db.js";
+import { notifyStartup, notifyTrade, notifyExit, notifyMilestone } from "./core/notify.js";
 import { startPriceFeed, getPrice } from "./feeds/binance.js";
+import { aggressiveKelly, getCalibrationFactor } from "./core/aggressive_kelly.js";
+import { logScanStart, logScanComplete, telemetryEvaluated, telemetryNoEdge, telemetryBelowThreshold, telemetrySizeMin, telemetryBlocked, telemetryTraded, telemetryCouncilDeliberation, telemetryCouncilSkip, getStrategyTelemetry, getCouncilTelemetry } from "./core/telemetry.js";
 
 // KALSHI EXCHANGE
 import { KalshiClient, kalshiMarketToUnified } from "./exchanges/kalshi/kalshi_client.js";
@@ -23,9 +27,26 @@ import { KalshiWebSocket } from "./exchanges/kalshi/kalshi_websocket.js";
 import {
   scanHourlySniper,
   scanMonotonicityArb,
-  findEconomicEvents,
+  scanEconomicMarkets,
+  scanWeatherMarkets,
   scanCrossPlatformDivergences,
+  scanHighConfidence,
+  getOddsMovementSignals,
 } from "./strategies/kalshi/kalshi_strategies.js";
+import { scanWithEnsemble } from "./strategies/multi_model_ensemble.js";
+
+// MARKET MAKER
+import { findMarketMakingOpportunities, placeMarketMakerOrders, manageInventory } from "./strategies/kalshi/market_maker.js";
+import { initTurboTracker, recordTurboEntry, recordTurboOutcome, getTurboStats, getTurboSizeMultiplier, shouldSkipAsset, getRecentTurboContext } from "./strategies/kalshi/turbo_tracker.js";
+import { recordCycleResult, recordBrainOutcome, getBrainStats, recordEntryMinute, clearActivePosition, setBrainBankroll, initGrowthTargets, setGrowthBaseline, updateGrowthProgress, evaluateAndRatchetTarget, getGrowthTargetState } from "./strategies/kalshi/turbo_brain.js";
+import { logBankrollSnapshot } from "./core/db.js";
+
+// DATA FEEDS
+import { recordPriceSnapshots } from "./feeds/odds_movement.js";
+
+// POSITION MANAGEMENT
+import { startPositionManager, getPositionSummary } from "./core/position_manager.js";
+import { startResolutionTracker, snapshotPrices } from "./core/resolution_tracker.js";
 
 // EVOLUTION
 import { initPerformanceTracker, recordSignal } from "./evolution/performance_tracker.js";
@@ -41,46 +62,125 @@ import { initGenius, deliberate, retrospect, registerDecision, startGeniusLoops,
 // ALPHA SOURCES
 import { initAlphaSources, startAlphaSources, getFusedAlpha, getTriggeredAlphaMarkets, markActedOn } from "./alpha_sources/alpha_orchestrator.js";
 
+// COMPOUND ENGINE
+import { initCompoundTracking, updateCompoundState, isStrategyUnlocked, allocateCapital, recordStrategyYield, checkAutoWithdrawal } from "./compound/compound_engine.js";
+
+// ADVANCED FEEDS (Order Book, Funding Rate, Liquidation, VWAP, VPIN)
+import { startAdvancedFeeds, getOrderBookImbalance, getFundingBias, detectLiquidationCascade, getVWAP, getVPIN, classifyTrade } from "./feeds/binance_advanced.js";
+
+// GENIUS SIGNALS (Regime, Stale Price, Confluence, Time Profiling, Circuit Breaker, Backtester, Adaptive, Correlation)
+import { classifyRegime, detectStalePrice, scoreConfluence, recordTimeProfile, getTimeAdvice, canTradeCircuitBreaker, recordTradeResult, correlationDiscount, recordSignalOutcome, getOptimalParameters } from "./core/genius_signals.js";
+
+// SMART EXECUTION (Order Routing, Partial Scaling)
+import { getOrderStrategy, createScaledEntry, checkScaleOut, recordFillStats } from "./core/smart_execution.js";
+
+// TAX TRACKING
+import { initTaxTracker, recordTaxLot, closeTaxLot, getTaxSummary } from "./core/tax_tracker.js";
+
+// LIQUIDITY ENGINE
+import { initLiquidityEngine, wireLiquidityEngine, startLiquidityEngine } from "./liquidity/liquidity_orchestrator.js";
+
+// VELOCITY ENGINE
+import { initVelocityOrchestrator, wireVelocityOrchestrator, startVelocityOrchestrator, velocityAllocateTrade, velocityReleaseTranche } from "./velocity/velocity_orchestrator.js";
+
 // DASHBOARD
-import { startDashboard, setBotState } from "./dashboard/server.js";
+import { startDashboard, setBotState, pushActivity } from "./dashboard/server.js";
 
 // Global state
 let bankroll = config.STARTING_BANKROLL;
-const STARTING_BANKROLL = bankroll;
-let openPositions = 0;
+let STARTING_BANKROLL = bankroll;
+let lastBankrollSyncAt: number | null = null;
+let openPositionCount = 0;
 let totalTrades = 0;
 let signalCounter = 0;
-let paused = false;
+let paused = false; // Overwritten from DB in main()
+let consecutiveWins = 0;
 const startTime = Date.now();
 let latestVerdict: any = null;
 let cachedMarkets: any[] = [];
+let nextMilestone = config.MILESTONES.find(m => m > bankroll) ?? config.MILESTONES[0];
 
 const genSignalId = (s: string) => `${s}-${Date.now()}-${++signalCounter}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+let councilConsecutivePasses = 0;
+let councilIntervalMs = config.CLAUDE_SCAN_INTERVAL_MS;
+let councilTimer: ReturnType<typeof setInterval> | null = null;
+
+// Log buffer for chat assistant
+const logBuffer: string[] = [];
+const MAX_LOG_LINES = 200;
+const origLog = console.log;
+const origError = console.error;
+const origWarn = console.warn;
+const captureLog = (...args: any[]) => {
+  const line = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+  logBuffer.push(`[${new Date().toLocaleTimeString()}] ${line}`);
+  if (logBuffer.length > MAX_LOG_LINES) logBuffer.splice(0, logBuffer.length - MAX_LOG_LINES);
+  origLog(...args);
+};
+const captureError = (...args: any[]) => {
+  const line = args.map(a => typeof a === "string" ? a : (a?.message ?? JSON.stringify(a))).join(" ");
+  logBuffer.push(`[${new Date().toLocaleTimeString()}] ❌ ${line}`);
+  if (logBuffer.length > MAX_LOG_LINES) logBuffer.splice(0, logBuffer.length - MAX_LOG_LINES);
+  origError(...args);
+};
+console.log = captureLog;
+console.error = captureError;
+console.warn = (...args: any[]) => { captureLog("⚠️", ...args); origWarn(...args); };
+
 async function main() {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🧠 KALSHI GENIUS — 6-Layer Cognitive Architecture         ║
+║  🧠 KALSHI GENIUS V3 — BEAST MODE                         ║
 ╠════════════════════════════════════════════════════════════╣
-║  Strategies × Evolution × Genius × Meta × Alpha × Monitor  ║
+║  8 Layers × Aggressive Kelly × Data-Driven Edge            ║
 ╚════════════════════════════════════════════════════════════╝`);
 
+  const phase = getPhaseParams(bankroll);
   console.log(`  Mode:      ${config.DRY_RUN ? "🧪 PAPER" : "🔴 LIVE"}`);
   console.log(`  Exchange:  Kalshi (${config.KALSHI_ENV})`);
   console.log(`  Bankroll:  $${bankroll.toFixed(2)}`);
-  console.log(`  Phase:     ${getPhaseParams(bankroll).label}`);
+  console.log(`  Phase:     ${phase.label}`);
+  console.log(`  Kelly:     ${(phase.kelly * 100).toFixed(0)}% | Max Pos: ${(phase.maxPosPct * 100).toFixed(0)}% | Positions: ${phase.maxPositions}`);
+  console.log(`  Target:    $${nextMilestone} (${(nextMilestone / bankroll).toFixed(0)}x)`);
 
   console.log("\n  ARCHITECTURE:");
-  console.log("  1️⃣  STRATEGIES    → ⚡ hourly sniper, 📐 monotonicity arb, 🧠 council, 📊 economic, 🌐 cross-platform");
+  console.log("  1️⃣  STRATEGIES    → ⚡ sniper, 📐 arb, 📊 economic, 🌤️ weather+GFS, 🌐 cross-plat, 💹 MM, 🎯 high-conf, 🤖 ensemble");
   console.log("  2️⃣  EVOLUTION     → 5 loops (reflex → omega)");
-  console.log("  3️⃣  GENIUS        → council, counterfactuals, hypotheses, genetics, calibration");
+  console.log("  3️⃣  GENIUS        → council + calibration + counterfactuals");
   console.log("  4️⃣  META          → strategy breeding, prompt evolution");
-  console.log("  5️⃣  ALPHA SOURCES → 📰 news, 🐋 whales, 📊 orderbook");
-  console.log("  6️⃣  DASHBOARD     → phone-first monitoring\n");
+  console.log("  5️⃣  ALPHA         → 📰 news, 🐋 whales, 📊 orderbook, 📈 FRED, 🌤️ NWS, 📉 odds velocity");
+  console.log("  6️⃣  DASHBOARD     → phone-first monitoring + calibration");
+  console.log("  7️⃣  POSITIONS     → take-profit, stop-loss, trailing-stop, time-exit");
+  console.log("  8️⃣  RESOLUTION    → feedback loop, milestones, calibration");
+  console.log("  9️⃣  COMPOUND      → 6-phase growth engine, strategy unlocks");
+  console.log("  🔟  LIQUIDITY     → spread capture, adverse selection, inventory mgmt");
+  console.log("  1️⃣1️⃣  VELOCITY     → parallel tranches, laddered exits, capital cycling");
+  console.log("  1️⃣2️⃣  GENIUS SIG   → confluence, regime, circuit breaker, time profiling");
+  console.log("  1️⃣3️⃣  ADVANCED     → OBI, VPIN, VWAP, funding rate, liquidation cascade");
+  console.log("  1️⃣4️⃣  EXECUTION    → smart routing, partial scaling, tax tracking\n");
 
   if (!config.ANTHROPIC_API_KEY) { console.error("❌ ANTHROPIC_API_KEY required"); process.exit(1); }
   if (!config.KALSHI_API_KEY_ID) { console.error("❌ KALSHI_API_KEY_ID required"); process.exit(1); }
+
+  // ── Restore paused state from DB ──
+  const savedPaused = getBotState("paused", "false");
+  paused = savedPaused === "true";
+  console.log(`  🔄 Restored paused state: ${paused}`);
+
+  // ── Write PEM from env var if needed (Fly.io) ──
+  if (process.env.KALSHI_PRIVATE_KEY && config.KALSHI_PRIVATE_KEY_PATH) {
+    const { writeFileSync, mkdirSync } = await import("fs");
+    const { dirname } = await import("path");
+    mkdirSync(dirname(config.KALSHI_PRIVATE_KEY_PATH), { recursive: true });
+    writeFileSync(config.KALSHI_PRIVATE_KEY_PATH, process.env.KALSHI_PRIVATE_KEY, { mode: 0o600 });
+    console.log(`  📝 Wrote PEM to ${config.KALSHI_PRIVATE_KEY_PATH}`);
+  }
+
+  // V6: Init growth target tables early (before Kalshi connect calls setGrowthBaseline)
+  getDb();
+  initGrowthTargets();
 
   // ── Initialize Kalshi client ──
   const kalshi = new KalshiClient({
@@ -89,14 +189,30 @@ async function main() {
     privateKeyPath: config.KALSHI_PRIVATE_KEY_PATH,
   });
 
-  // Validate connection
   try {
     const balance = await kalshi.getBalance();
-    console.log(`✅ Kalshi connected (${config.KALSHI_ENV}) — Balance: $${(balance.balance / 100).toFixed(2)}`);
+    const balanceUsd = balance.balance / 100;
+    const payoutUsd = (balance.payout ?? 0) / 100;
+    const portfolioUsd = balanceUsd + payoutUsd;
+    console.log(`✅ Kalshi connected (${config.KALSHI_ENV}) — Cash: $${balanceUsd.toFixed(2)} | Positions: $${payoutUsd.toFixed(2)} | Portfolio: $${portfolioUsd.toFixed(2)}`);
+
+    // Sync bankroll from Kalshi if connected to production — use total portfolio value
+    if (config.KALSHI_ENV === "production" && portfolioUsd > 0) {
+      bankroll = portfolioUsd;
+      setBrainBankroll(portfolioUsd); // V5: Brain needs bankroll for sizing
+      setGrowthBaseline(portfolioUsd); // V6: Set today's growth baseline
+      STARTING_BANKROLL = portfolioUsd;
+      lastBankrollSyncAt = Date.now();
+      console.log(`💰 Initial bankroll synced from Kalshi: $${bankroll.toFixed(2)} (portfolio total)`);
+    } else {
+      console.log(`⚠️  Using config bankroll: $${bankroll.toFixed(2)} (env=${config.KALSHI_ENV})`);
+    }
   } catch (err: any) {
     console.error(`❌ Kalshi connection failed: ${err.message}`);
     process.exit(1);
   }
+
+  console.log(`🔒 Mode: ${config.DRY_RUN ? "PAPER (DRY_RUN=true)" : "LIVE (DRY_RUN=false)"} | Paused: ${paused} | Bankroll: $${bankroll.toFixed(2)}`);
 
   // ── Initialize Kalshi WebSocket ──
   let kalshiWs: KalshiWebSocket | null = null;
@@ -112,8 +228,7 @@ async function main() {
     kalshiWs = null;
   }
 
-  // Initialize all layers
-  getDb();
+  // Initialize all layers (getDb already called above for growth targets)
   initPerformanceTracker();
   initStrategyWeights();
   initMemory();
@@ -121,38 +236,219 @@ async function main() {
   initGenius();
   registerBaseHypotheses();
   initAlphaSources();
+  initCompoundTracking(bankroll);
+  initLiquidityEngine(() => bankroll);
+  initVelocityOrchestrator();
+  initTaxTracker(getDb());
   console.log("✅ All layers initialized\n");
 
-  // Expose state to dashboard
+  // Expose state to dashboard (V4: with full chat controls)
   setBotState({
     getBankroll: () => bankroll,
     getStartingBankroll: () => STARTING_BANKROLL,
-    getOpenPositions: () => openPositions,
+    getOpenPositions: () => openPositionCount,
     getStartTime: () => startTime,
     isPaused: () => paused,
-    setPaused: (p) => { paused = p; console.log(p ? "⏸  Bot paused" : "▶  Bot resumed"); },
+    setPaused: (p) => { paused = p; dbSetBotState("paused", String(p)); console.log(p ? "⏸  Bot paused" : "▶  Bot resumed"); },
     getLatestVerdict: () => latestVerdict,
+    getKalshiClient: () => kalshi,
+    getLastSyncAt: () => lastBankrollSyncAt,
+    triggerScan: (strategy: string) => {
+      console.log(`🔍 Manual scan triggered: ${strategy}`);
+    },
+    // V4: Chat-driven controls
+    closePosition: async (ticker: string) => {
+      const positions = getOpenPositions();
+      const pos = positions.find((p: any) => p.ticker === ticker);
+      if (!pos) return `No open position found for ticker '${ticker}'. Open positions: ${positions.map((p: any) => p.ticker).join(", ") || "none"}`;
+      try {
+        if (!config.DRY_RUN) {
+          const side = pos.side.toLowerCase() as "yes" | "no";
+          await kalshi.placeOrder({
+            ticker: pos.ticker,
+            side,
+            action: "sell",
+            type: "limit",
+            count: pos.contracts,
+            yes_price: side === "yes" ? 1 : undefined,
+            no_price: side === "no" ? 1 : undefined,
+          });
+        }
+        const pnl = pos.unrealized_pnl ?? 0;
+        dbClosePosition(pos.id, pos.current_price ?? pos.entry_price, "chat_manual_close", pnl);
+        openPositionCount = Math.max(0, openPositionCount - 1);
+        return `Closed position ${ticker}: ${pos.side} ${pos.contracts} contracts, PnL ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}${config.DRY_RUN ? " (paper mode)" : ""}`;
+      } catch (err: any) {
+        return `Failed to close ${ticker}: ${err.message}`;
+      }
+    },
+    emergencyStop: async () => {
+      paused = true;
+      dbSetBotState("paused", "true");
+      const lines: string[] = ["Bot paused."];
+      try {
+        const ordersResp = await kalshi.getOrders({ status: "resting", limit: 50 });
+        const orders = ordersResp.orders ?? [];
+        let cancelled = 0;
+        for (const order of orders) {
+          try { await kalshi.cancelOrder(order.order_id); cancelled++; } catch {}
+        }
+        lines.push(`Cancelled ${cancelled}/${orders.length} resting orders.`);
+      } catch (err: any) {
+        lines.push(`Could not fetch/cancel orders: ${err.message}`);
+      }
+      return lines.join(" ");
+    },
+    getLogs: (n: number) => logBuffer.slice(-n),
+    setDryRun: (dry: boolean) => {
+      (config as any).DRY_RUN = dry;
+      console.log(`🔄 Mode changed via chat: ${dry ? "PAPER" : "🔴 LIVE"}`);
+    },
+    // V5: Full agency controls
+    placeTrade: async (ticker: string, direction: "YES" | "NO", size: number) => {
+      try {
+        const { market } = await kalshi.getMarket(ticker);
+        const side = direction.toLowerCase() as "yes" | "no";
+        const priceField = side === "yes" ? market.yes_ask : market.no_ask;
+        const priceDollars = priceField / 100;
+        const count = Math.max(1, Math.floor(size / priceDollars));
+
+        if (config.DRY_RUN) {
+          openPosition({
+            ticker, order_id: `chat-manual-${Date.now()}`, side: direction,
+            entry_price: priceField, contracts: count, size_usd: size,
+            strategy: "chat_manual", market_question: market.title,
+          });
+          openPositionCount++;
+          return `[PAPER] Placed ${direction} ${count}x ${ticker} @ ${priceField}¢, size $${size.toFixed(2)}. "${market.title}"`;
+        }
+
+        const result = await kalshi.placeOrder({
+          ticker, side, action: "buy", type: "limit", count,
+          yes_price: side === "yes" ? priceField : undefined,
+          no_price: side === "no" ? priceField : undefined,
+        });
+        openPosition({
+          ticker, order_id: result?.order?.order_id ?? `chat-${Date.now()}`,
+          side: direction, entry_price: priceField, contracts: count,
+          size_usd: size, strategy: "chat_manual", market_question: market.title,
+        });
+        openPositionCount++;
+        return `Placed ${direction} ${count}x ${ticker} @ ${priceField}¢, size $${size.toFixed(2)}. Order: ${result?.order?.order_id ?? "submitted"}. "${market.title}"`;
+      } catch (err: any) {
+        return `Trade failed: ${err.message}`;
+      }
+    },
+    setBankroll: (amount: number) => {
+      bankroll = amount;
+      console.log(`💰 Bankroll manually set to $${amount.toFixed(2)} via chat`);
+    },
+    getCachedMarkets: () => cachedMarkets,
   });
 
-  // Start dashboard server
+  // Start dashboard
   const dashboardPort = parseInt(process.env.DASHBOARD_PORT ?? "3000");
   startDashboard(dashboardPort);
 
-  // Start Binance price feed (used by hourly sniper for live BTC/ETH prices)
+  // Initialize turbo performance tracker
+  initTurboTracker();
+
+  // Start Binance price feed + advanced feeds
   startPriceFeed();
+  startAdvancedFeeds();
   await sleep(3000);
 
-  // Cache active Kalshi markets
+  // Cache active Kalshi markets (events + turbo crypto series)
   const refreshMarkets = async () => {
     try {
-      const { markets } = await kalshi.getMarkets({ limit: 200 });
+      const markets = await kalshi.getAllNonSportsMarkets();
+
+      // Also fetch turbo crypto markets (not in events endpoint)
+      const turboSeries = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"];
+      let turboCount = 0;
+      for (const series of turboSeries) {
+        try {
+          const { markets: turboMarkets } = await kalshi.getMarkets({ series_ticker: series, limit: 20 });
+          for (const tm of turboMarkets) {
+            if (tm.status && !["active", "open", "trading", "initialized"].includes(tm.status)) continue;
+            if (!markets.some(m => m.ticker === tm.ticker)) {
+              markets.push(tm);
+              turboCount++;
+            }
+          }
+        } catch (e: any) {
+          console.log(`  ⚠️ Turbo fetch ${series}: ${e.message?.slice(0, 100)}`);
+        }
+      }
+
       cachedMarkets = markets.map(kalshiMarketToUnified);
-    } catch {}
+      const within24h = cachedMarkets.filter(m => m.end_date && (new Date(m.end_date).getTime() - Date.now()) / 3600000 <= 24).length;
+      console.log(`📊 Market refresh: ${cachedMarkets.length} cached (${turboCount} turbo), ${within24h} closing within 24h`);
+      pushActivity("📊", `Market refresh: ${cachedMarkets.length} markets (${turboCount} turbo)`);
+
+      // Record price snapshots for odds movement detection
+      if (cachedMarkets.length > 0) {
+        recordPriceSnapshots(cachedMarkets.map(m => ({
+          condition_id: m.condition_id,
+          yes_price: m.yes_price,
+          no_price: m.no_price,
+          volume: 0,
+          volume_24h: m.volume,
+        })));
+      }
+    } catch (err: any) {
+      console.error(`⚠️ Market refresh failed: ${err.message}`);
+    }
   };
   await refreshMarkets();
-  setInterval(refreshMarkets, 60 * 1000);
+  setInterval(refreshMarkets, 5 * 60 * 1000); // 5 min — full refresh including events
 
-  // Subscribe to ticker updates for top markets
+  // Fast turbo-only refresh every 60s — turbo markets cycle every 15 min
+  let _turboRefreshCount = 0;
+  const refreshTurboOnly = async () => {
+    try {
+      const turboSeries = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"];
+      let added = 0;
+      let fetched = 0;
+      let skippedStatus = new Map<string, number>();
+      for (const series of turboSeries) {
+        try {
+          const { markets: turboMarkets } = await kalshi.getMarkets({ series_ticker: series, limit: 20 });
+          fetched += turboMarkets.length;
+          for (const tm of turboMarkets) {
+            // Log status distribution for first 3 refreshes
+            if (_turboRefreshCount < 3) {
+              skippedStatus.set(tm.status, (skippedStatus.get(tm.status) ?? 0) + 1);
+            }
+            // Accept "active" or any open-like status (API may return different values)
+            if (tm.status && !["active", "open", "trading", "initialized"].includes(tm.status)) continue;
+            const unified = kalshiMarketToUnified(tm);
+            const idx = cachedMarkets.findIndex(m => m.condition_id === unified.condition_id);
+            if (idx >= 0) {
+              cachedMarkets[idx] = unified;
+            } else {
+              cachedMarkets.push(unified);
+              added++;
+            }
+          }
+        } catch (e: any) {
+          console.log(`  ⚠️ Turbo fast refresh ${series}: ${e.message?.slice(0, 100)}`);
+        }
+      }
+      _turboRefreshCount++;
+      const turboInCache = cachedMarkets.filter(m => m.condition_id.includes("15M")).length;
+      // Always log first 3 refreshes for debugging
+      if (_turboRefreshCount <= 3 || added > 0) {
+        const statusStr = [...skippedStatus.entries()].map(([k,v]) => `${k}=${v}`).join(", ");
+        console.log(`⚡ Turbo refresh #${_turboRefreshCount}: fetched=${fetched}, added=${added}, ${turboInCache} in cache. Statuses: ${statusStr}`);
+      }
+    } catch (e: any) {
+      console.error(`⚠️ Turbo refresh error: ${e.message}`);
+    }
+  };
+  setInterval(refreshTurboOnly, 60 * 1000); // Every 60s
+
+  // Subscribe to ticker updates
   if (kalshiWs) {
     const topTickers = cachedMarkets.slice(0, 20).map((m) => m.condition_id);
     if (topTickers.length > 0) {
@@ -161,35 +457,254 @@ async function main() {
     }
   }
 
-  // Engage all learning loops
+  // Wire and start liquidity engine
+  wireLiquidityEngine(kalshi, kalshiWs);
+  startLiquidityEngine();
+
+  // Wire and start velocity engine
+  wireVelocityOrchestrator(kalshi);
+  startVelocityOrchestrator(() => bankroll, () => paused, config.DRY_RUN);
+
+  // Start evolution and genius loops
   startEvolutionLoops(() => bankroll, STARTING_BANKROLL);
-  startGeniusLoops();
-  startAlphaSources(() => cachedMarkets.map((m) => m.question).slice(0, 30));
+  startGeniusLoops(() => bankroll);
+  startAlphaSources(() => cachedMarkets.map((m) => m.question).slice(0, 30), () => bankroll);
+
+  // ── Start Position Manager (exits) ──
+  startPositionManager(kalshi, (ticker, pnl, reason) => {
+    if (config.DRY_RUN) {
+      bankroll += pnl; // paper trading accumulator
+    }
+    // Note: in live mode, the next sync loop cycle will update bankroll from Kalshi
+    openPositionCount = Math.max(0, openPositionCount - 1);
+    updateCompoundState(bankroll);
+    velocityReleaseTranche(ticker, pnl);
+
+    // Genius layer feedback on real exits
+    const won = pnl > 0;
+    recordTradeResult(won);
+    recordTimeProfile(new Date().getUTCHours(), won, pnl);
+
+    // Track turbo outcomes for learning + feed multi-cycle memory + signal analysis
+    const isTurboExit = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"].some(p => ticker.startsWith(p));
+    if (isTurboExit) {
+      recordTurboOutcome(ticker, pnl > 0, pnl, 0);
+      const turboAsset = ticker.includes("BTC") ? "BTC" : ticker.includes("ETH") ? "ETH" : ticker.includes("SOL") ? "SOL" : "XRP";
+      const lastContext = getRecentTurboContext(1);
+      const lastSignals = lastContext.length > 0 && lastContext[0].asset === turboAsset
+        ? (lastContext[0].momentum_signal?.split(",") ?? []) : [];
+      recordBrainOutcome(pnl > 0, pnl, turboAsset, "YES", 0, lastSignals);
+      updateGrowthProgress(pnl, pnl > 0); // V6: Feed growth target tracker
+      recordCycleResult(turboAsset, "YES", pnl > 0, lastSignals);
+      recordEntryMinute(0, pnl > 0, pnl); // V4 #11: micro-timing (approx)
+      clearActivePosition(turboAsset); // V4 #9: free correlation slot
+    }
+
+    console.log(`  📤 EXIT ${ticker}: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} [${reason}] | Bankroll: $${bankroll.toFixed(2)}`);
+    pushActivity("📤", `Exit ${ticker}: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} [${reason}]`);
+    notifyExit(ticker, pnl, reason, bankroll);
+    checkMilestoneInline();
+  });
+
+  // ── Start Resolution Tracker (feedback loop) ──
+  startResolutionTracker(kalshi, () => bankroll, () => totalTrades, () => startTime, (pnl, ticker) => {
+    if (config.DRY_RUN) {
+      bankroll += pnl; // paper trading accumulator
+    }
+    // Track turbo outcomes for learning + feed multi-cycle memory
+    if (ticker) {
+      const isTurboResolution = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"].some(p => ticker.startsWith(p));
+      if (isTurboResolution) {
+        recordTurboOutcome(ticker, pnl > 0, pnl, 0);
+        const turboAsset = ticker.includes("BTC") ? "BTC" : ticker.includes("ETH") ? "ETH" : ticker.includes("SOL") ? "SOL" : "XRP";
+        const lastCtx = getRecentTurboContext(1);
+        const sigs = lastCtx.length > 0 && lastCtx[0].asset === turboAsset
+          ? (lastCtx[0].momentum_signal?.split(",") ?? []) : [];
+        recordBrainOutcome(pnl > 0, pnl, turboAsset, "YES", 0, sigs);
+        updateGrowthProgress(pnl, pnl > 0); // V6: Feed growth target tracker
+        recordCycleResult(turboAsset, "YES", pnl > 0, sigs);
+        recordEntryMinute(0, pnl > 0, pnl);
+        clearActivePosition(turboAsset);
+      }
+    }
+    // Genius layer feedback on resolution
+    const won = pnl > 0;
+    recordTradeResult(won);
+    recordTimeProfile(new Date().getUTCHours(), won, pnl);
+    // Note: in live mode, the next sync loop cycle will update bankroll from Kalshi
+    if (pnl > 0) {
+      consecutiveWins++;
+    } else {
+      consecutiveWins = 0;
+    }
+    openPositionCount = Math.max(0, openPositionCount - 1);
+    updateCompoundState(bankroll);
+    if (ticker) velocityReleaseTranche(ticker, pnl);
+    checkMilestoneInline();
+  });
+
+  // ── Periodic bankroll sync from Kalshi (live mode only) ──
+  if (config.KALSHI_ENV === "production") {
+    setInterval(async () => {
+      // Only sync when trading live — paper mode uses the accumulator
+      if (config.DRY_RUN) return;
+      try {
+        const balance = await kalshi.getBalance();
+        const cashUsd = balance.balance / 100;
+        const payoutUsd = (balance.payout ?? 0) / 100;
+        const newBankroll = cashUsd + payoutUsd;
+        if (Math.abs(newBankroll - bankroll) > 0.01) {
+          console.log(`💰 Bankroll sync: $${bankroll.toFixed(2)} → $${newBankroll.toFixed(2)} (cash: $${cashUsd.toFixed(2)} + positions: $${payoutUsd.toFixed(2)})`);
+          bankroll = newBankroll;
+          updateCompoundState(bankroll);
+          setBrainBankroll(bankroll); // V5: Brain needs bankroll for sizing
+        }
+        lastBankrollSyncAt = Date.now();
+        // V6: Log bankroll snapshot for equity curve
+        logBankrollSnapshot(bankroll, 0, openPositionCount);
+      } catch (err: any) {
+        console.error(`⚠️  Bankroll sync failed: ${err.message}`);
+      }
+    }, 60 * 1000);
+    console.log(`💰 Bankroll sync loop armed (60s, ${config.DRY_RUN ? "paused in DRY_RUN" : "active"})`);
+  }
+
+  // V6: Daily growth target ratchet — check once per hour if a new day has started
+  let lastGrowthDay = new Date().toISOString().slice(0, 10);
+  setInterval(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== lastGrowthDay) {
+      console.log(`📈 New day detected — evaluating growth target ratchet...`);
+      evaluateAndRatchetTarget();
+      lastGrowthDay = today;
+      const gs = getGrowthTargetState();
+      console.log(`📈 Growth target: ${gs.daily_target_pct.toFixed(0)}% daily | Hit rate: ${(gs.hit_rate * 100).toFixed(0)}% | Best day: ${((gs.best_day_mult - 1) * 100).toFixed(0)}%`);
+      pushActivity("📈", `Daily target: +${gs.daily_target_pct.toFixed(0)}% | Progress: ${gs.progress_pct.toFixed(0)}%`);
+    }
+  }, 5 * 60 * 1000); // Check every 5 minutes
 
   await notifyStartup();
+  const gs = getGrowthTargetState();
+  pushActivity("🚀", `Bot started in ${config.DRY_RUN ? "PAPER" : "LIVE"} mode — $${bankroll.toFixed(2)} | Target: +${gs.daily_target_pct.toFixed(0)}%/day`);
 
-  // ═══ Strategy 1: Hourly Close Sniper ═══
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 1: Hourly Close Sniper
+  // ═══════════════════════════════════════════════════
   if (config.STRATEGY_CYCLE_SNIPER) {
     const runSniper = async () => {
       try {
         if (paused || !shouldFire("hourly_sniper")) return;
-        const regime = getCurrentRegime();
-        if (regime && (regime.regime === "DEAD" || regime.regime === "VOLATILE")) return;
-        const { ok } = canTrade(bankroll, openPositions);
+        // No regime gate — sniper should ALWAYS scan crypto markets regardless of regime
+        const { ok, reason } = canTrade(bankroll, openPositionCount);
         if (!ok) return;
 
         const signals = await scanHourlySniper(kalshi, () => ({
           btc: getPrice("btcusdt")?.price,
           eth: getPrice("ethusdt")?.price,
           sol: getPrice("solusdt")?.price,
+          xrp: getPrice("xrpusdt")?.price,
         }));
 
-        for (const sig of signals.slice(0, 1)) {
-          const phase = getPhaseParams(bankroll);
-          let size = bankroll * phase.kelly * sig.confidence * 0.5;
-          size = applyWeightToSize("hourly_sniper", size);
-          if (regime) size *= regime.recommended_aggression;
-          if (size < 0.5) continue;
+        logScanStart("hourly_sniper", signals.length);
+        let _sniperTraded = 0;
+
+        // Log turbo stats every scan if we have data
+        const turboStats = getTurboStats();
+        if (turboStats.total_trades > 0) {
+          const sizeMultStr = getTurboSizeMultiplier().toFixed(2);
+          const brain = getBrainStats();
+          const brainStr = brain.trades > 0
+            ? ` | 🧠 Brain: ${brain.trades}t ${(brain.winRate*100).toFixed(0)}%WR ${brain.pnl >= 0 ? '+' : ''}$${brain.pnl.toFixed(2)} peak:${(brain.peakWR*100).toFixed(0)}%`
+            : "";
+          console.log(`  📈 [Turbo] ${turboStats.total_trades} trades | WR: ${(turboStats.win_rate*100).toFixed(0)}% (recent: ${(turboStats.recent_win_rate*100).toFixed(0)}%) | PnL: $${turboStats.total_pnl.toFixed(2)} | streak: ${turboStats.streak > 0 ? '+' : ''}${turboStats.streak} | size: ${sizeMultStr}x${brainStr}`);
+        }
+
+        // V4 #8: Sort signals by EV (expected value) — take the best opportunities first
+        const rankedSignals = [...signals].sort((a, b) => (b.ev_cents ?? 0) - (a.ev_cents ?? 0));
+
+        for (const sig of rankedSignals.slice(0, 4)) {  // V4 #3: Take top 4 (multi-asset)
+          telemetryEvaluated("hourly_sniper");
+
+          // ── TURBO LEARNING: Skip assets that consistently lose ──
+          // BUT: if TurboBrain approved this trade, trust the brain over legacy stats
+          // The brain has its own loss pattern blocking that's smarter than blanket asset bans
+          const sigAsset = sig.ticker.includes("BTC") ? "BTC" : sig.ticker.includes("ETH") ? "ETH" : sig.ticker.includes("SOL") ? "SOL" : sig.ticker.includes("XRP") ? "XRP" : "OTHER";
+          const isBrainApproved = sig.reasoning.includes("[TurboBrain]");
+          if (!isBrainApproved && shouldSkipAsset(sigAsset)) {
+            console.log(`  🧊 [Turbo] Skipping ${sigAsset} — win rate too low (${(turboStats.by_asset[sigAsset]?.win_rate ?? 0 * 100).toFixed(0)}%)`);
+            continue;
+          }
+
+          // ══════════════════════════════════════════════════
+          // INTELLIGENCE LAYER 1: Regime-adaptive confidence gate
+          // Require higher confidence in volatile markets, lower in trending
+          // ══════════════════════════════════════════════════
+          const { getCurrentRegime } = await import("./evolution/regime_detector.js");
+          const regime = getCurrentRegime();
+          let regimeConfidenceGate = 0.30; // Default
+          let regimeLabel = "default";
+          if (regime) {
+            if (regime.regime === "VOLATILE") { regimeConfidenceGate = 0.50; regimeLabel = "VOLATILE"; }
+            else if (regime.regime === "TRENDING_UP" || regime.regime === "TRENDING_DOWN") { regimeConfidenceGate = 0.22; regimeLabel = regime.regime; }
+            else if (regime.regime === "QUIET") { regimeConfidenceGate = 0.30; regimeLabel = "QUIET"; }
+            else if (regime.regime === "NEWS_DRIVEN") { regimeConfidenceGate = 0.45; regimeLabel = "NEWS"; }
+          }
+          if (sig.confidence < regimeConfidenceGate) {
+            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.potential_return_pct, confidence: sig.confidence, reject_reason: `regime_gate_${regimeLabel}`, market_question: sig.market_question, price: sig.contract_price });
+            continue;
+          }
+
+          // ══════════════════════════════════════════════════
+          // INTELLIGENCE LAYER 2: Adverse selection filter
+          // Detect when informed traders are active — reduce size or skip
+          // ══════════════════════════════════════════════════
+          const { computeAdverseScore } = await import("./liquidity/adverse_selection.js");
+          const adverseScore = computeAdverseScore(sig.ticker);
+          let adverseMultiplier = 1.0;
+          if (adverseScore > 0.7) {
+            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.potential_return_pct, confidence: sig.confidence, reject_reason: "adverse_selection_high", market_question: sig.market_question, price: sig.contract_price });
+            continue; // Too toxic — skip entirely
+          } else if (adverseScore > 0.4) {
+            adverseMultiplier = 0.5; // Reduce size by 50%
+          }
+
+          // ── Confluence scoring: boost confidence with multi-signal agreement ──
+          const symbol = sig.ticker.toLowerCase().includes("btc") ? "btcusdt"
+            : sig.ticker.toLowerCase().includes("eth") ? "ethusdt"
+            : sig.ticker.toLowerCase().includes("sol") ? "solusdt"
+            : sig.ticker.toLowerCase().includes("xrp") ? "xrpusdt"
+            : null;
+          let confluenceBoost = 1.0;
+          if (symbol) {
+            const confluence = scoreConfluence(symbol, sig.direction as "YES" | "NO", symbol.replace("usdt", "").toUpperCase());
+            const normalizedScore = confluence.total_score / 10;
+            if (normalizedScore > 0.6) {
+              confluenceBoost = 1 + (normalizedScore - 0.6) * 0.5;
+              console.log(`     🎯 Confluence: ${confluence.total_score.toFixed(1)}/10 (${confluence.signals_agreeing}/${confluence.signals_total} signals) → +${((confluenceBoost - 1) * 100).toFixed(0)}% size`);
+            }
+          }
+
+          // ══════════════════════════════════════════════════
+          // INTELLIGENCE LAYER 3: Bayesian strategy weight scaling
+          // Hot strategies get 1.5x, cold get 0.3x, frozen = skip
+          // ══════════════════════════════════════════════════
+          const { applyWeightToSize } = await import("./evolution/strategy_weights.js");
+          const turboMult = getTurboSizeMultiplier();
+          const brainMult = sig.turbo_brain_size_multiplier ?? 1.0;  // TurboBrain asymmetric Kelly
+          const rawSize = calculatePosition(sig.potential_return_pct, sig.contract_price, bankroll, "hourly_sniper", {
+            confidence: sig.confidence,
+            consecutive_wins: consecutiveWins,
+          }) * confluenceBoost * adverseMultiplier * turboMult * brainMult;
+          // V5: Hard max risk cap — no single trade should risk more than 10% of bankroll
+          // The -$4.90 and -$6.39 losses were balance-killers
+          const maxTradeSize = Math.max(1.0, bankroll * 0.10);
+          const cappedSize = Math.min(rawSize, maxTradeSize);
+          const size = applyWeightToSize("hourly_sniper", cappedSize);
+          if (size < 0.50) {
+            telemetrySizeMin("hourly_sniper");
+            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.potential_return_pct, confidence: sig.confidence, reject_reason: "size_too_small", market_question: sig.market_question, price: sig.contract_price });
+            continue;
+          }
 
           await executeTrade(kalshi, {
             strategy: "hourly_sniper",
@@ -204,26 +719,56 @@ async function main() {
             confidence: sig.confidence,
             hypothesisName: "hourly_sniper_final_minutes",
           });
+          telemetryTraded("hourly_sniper");
+
+          // Record turbo entry for learning
+          const isTurboTrade = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"].some(p => sig.ticker.startsWith(p));
+          if (isTurboTrade) {
+            const { getCurrentRegime } = await import("./evolution/regime_detector.js");
+            // V2: Store signal sources for post-trade analysis
+            const brainSources = sig.reasoning.includes("[TurboBrain]")
+              ? sig.reasoning.replace(/.*signals: /, "").slice(0, 100)
+              : sig.reasoning.slice(0, 50);
+            recordTurboEntry({
+              ticker: sig.ticker,
+              asset: sigAsset,
+              direction: sig.direction,
+              entry_price: sig.contract_price,
+              momentum_signal: brainSources,
+              regime: getCurrentRegime()?.regime ?? "UNKNOWN",
+              confidence: sig.confidence,
+            });
+          }
+          pushActivity("⚡", `Sniper trade: ${sig.ticker} ${sig.direction}`);
+          _sniperTraded++;
         }
+        // Count signals not taken as no_edge (filtered by strategy internally)
+        if (signals.length === 0) telemetryNoEdge("hourly_sniper");
+        logScanComplete("hourly_sniper");
       } catch {}
     };
     setInterval(runSniper, config.SNIPER_SCAN_INTERVAL_MS);
-    console.log("⚡ Hourly close sniper armed");
+    console.log("⚡ Hourly close sniper armed (30s scan)");
   }
 
-  // ═══ Strategy 2: Monotonicity Arb ═══
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 2: Monotonicity Arb (risk-free!)
+  // ═══════════════════════════════════════════════════
   if (config.STRATEGY_NEGRISK_ARB) {
     const runMonotonicity = async () => {
       try {
         if (paused || !shouldFire("monotonicity_arb")) return;
         const violations = await scanMonotonicityArb(kalshi);
+        logScanStart("monotonicity_arb", violations.length);
+        if (violations.length === 0) telemetryNoEdge("monotonicity_arb");
         for (const v of violations.slice(0, 3)) {
+          telemetryEvaluated("monotonicity_arb");
           const edgePct = v.edge_cents / 100;
-          const baseSize = calculatePosition(edgePct, v.market_a.yes_ask / 100, bankroll, "monotonicity_arb");
-          const size = applyWeightToSize("monotonicity_arb", baseSize);
-          if (size < 1) continue;
+          const size = calculatePosition(edgePct, v.market_a.yes_ask / 100, bankroll, "monotonicity_arb", {
+            confidence: 0.98, is_arb: true, consecutive_wins: consecutiveWins,
+          });
+          if (size < 0.50) { telemetrySizeMin("monotonicity_arb"); continue; }
 
-          // Buy the cheaper higher-strike YES
           await executeTrade(kalshi, {
             strategy: "monotonicity_arb",
             category: "arb",
@@ -234,67 +779,153 @@ async function main() {
             size,
             reasoning: v.reasoning,
             edge: edgePct,
-            confidence: 0.95,
+            confidence: 0.98,
             hypothesisName: "monotonicity_always_profitable",
           });
+          telemetryTraded("monotonicity_arb");
+          pushActivity("📐", `Arb found: ${v.market_a.ticker}`);
         }
+        logScanComplete("monotonicity_arb");
       } catch (err: any) { console.error(`Monotonicity: ${err.message}`); }
     };
     setTimeout(runMonotonicity, 8000);
     setInterval(runMonotonicity, config.MONOTONICITY_SCAN_INTERVAL_MS);
-    console.log("📐 Monotonicity arb scanner armed");
+    console.log("📐 Monotonicity arb scanner armed (45s scan)");
   }
 
-  // ═══ Strategy 3: Council-Deliberated Mispricing (alpha-aware) ═══
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 3: Council-Deliberated Mispricing
+  //   V3.1: Bankroll-gated + cached + pre-filtered
+  //   Below $100: skip council entirely (API cost > expected profit)
+  //   Above $100: pre-filter → cache check → deliberate only high-value
+  // ═══════════════════════════════════════════════════
   if (config.STRATEGY_MISPRICING) {
+    // Clean expired cache entries every 15 min
+    setInterval(() => cleanExpiredCache(), 15 * 60 * 1000);
+
     const runCouncil = async () => {
       try {
         if (paused || !shouldFire("mispricing")) return;
         const regime = getCurrentRegime();
-        if (regime && regime.regime === "VOLATILE") return;
-        const { ok } = canTrade(bankroll, openPositions);
-        if (!ok) return;
+        if (regime && regime.regime === "VOLATILE") { telemetryCouncilSkip("volatile_regime"); return; }
+        const { ok, reason } = canTrade(bankroll, openPositionCount);
+        if (!ok) { if (reason) console.log(`  🧠 Council skipped: ${reason}`); telemetryCouncilSkip(reason || "gate"); return; }
 
-        console.log("\n── 🧠 Cognitive Council (alpha-aware) ──");
-
-        const triggered = getTriggeredAlphaMarkets();
-        if (triggered.length > 0) {
-          console.log(`  🎯 ${triggered.length} markets with alpha signals`);
+        // BANKROLL GATE: Council costs ~$0.07/deliberation (Haiku).
+        // Even at $50 bankroll, a single winning trade can recoup dozens of deliberations.
+        if (bankroll < 25) {
+          telemetryCouncilSkip("bankroll_below_25");
+          return; // Too small to justify any API costs
         }
 
-        const liquid = cachedMarkets.filter((m) => m.yes_price > 0.01 && m.yes_price < 0.99);
-        const toAnalyze = [
-          ...liquid.filter((m) => triggered.some((t) => m.condition_id === t.market_id || m.question.slice(0, 30) === t.market_id.slice(0, 30))),
-          ...liquid.filter((m) => !triggered.some((t) => m.condition_id === t.market_id)),
-        ].slice(0, 3);
+        console.log("\n── 🧠 Cognitive Council ──");
 
-        for (const market of toAnalyze) {
-          await sleep(3000);
+        // Get odds movement + alpha signals
+        const oddsMovements = getOddsMovementSignals(cachedMarkets);
+        const hotMarkets = oddsMovements.filter(om => om.signal_strength === "strong" || om.signal_strength === "moderate");
+        const triggered = getTriggeredAlphaMarkets();
+
+        const now = Date.now();
+
+        const MAX_HOURS_TO_EXPIRY = 24; // 24h max — maximize capital velocity for compounding
+        const liquid = cachedMarkets.filter((m) => {
+          if (m.yes_price <= 0.01 || m.yes_price >= 0.99) return false;
+          if (m.end_date) {
+            const expiryMs = new Date(m.end_date).getTime();
+            if (expiryMs < now) return false;  // Already expired
+            if ((expiryMs - now) / (1000 * 60 * 60) > MAX_HOURS_TO_EXPIRY) return false; // Too far out
+          } else {
+            return false; // No end_date = unknown duration, skip
+          }
+          return true;
+        });
+
+        // ── PRE-FILTER: Score markets by edge potential BEFORE spending on Claude ──
+        // STRATEGY: Favor markets that resolve SOON (hours, not weeks).
+        // Short-term markets = faster capital turnover = more compounding cycles.
+        const alphaIds = new Set(triggered.map(t => t.market_id));
+        const hotIds = new Set(hotMarkets.map(h => h.ticker));
+
+        const scored = liquid.map(m => {
+          let score = 0;
+
+          // ── TIME-TO-EXPIRY BONUS: shorter = better ──
+          if (m.end_date) {
+            const hoursLeft = (new Date(m.end_date).getTime() - now) / (1000 * 60 * 60);
+            if (hoursLeft <= 4) score += 30;        // Resolves in hours — huge bonus
+            else if (hoursLeft <= 12) score += 25;   // Same day
+            else if (hoursLeft <= 24) score += 20;   // Tomorrow
+            else if (hoursLeft <= 48) score += 10;   // 2 days
+            // 48-72h gets no bonus but is still allowed
+          }
+
+          // Alpha signal boost (+40 points)
+          if (alphaIds.has(m.condition_id)) score += 40;
+
+          // Odds movement boost (+25 points for strong, +15 moderate)
+          const oddsHit = hotMarkets.find(h => h.ticker === m.condition_id);
+          if (oddsHit) score += oddsHit.signal_strength === "strong" ? 25 : 15;
+
+          // Price dislocation from 50% midpoint = higher potential edge
+          const dislocation = Math.abs(m.yes_price - 0.5);
+          if (dislocation > 0.10 && dislocation < 0.45) score += dislocation * 50;
+
+          // Volume/liquidity bonus — liquid markets are tradeable
+          if (m.volume > 10000) score += 15;
+          else if (m.volume > 1000) score += 10;
+          else if (m.volume > 100) score += 5;
+
+          // Baseline score for any liquid market in tradeable range
+          if (m.yes_price > 0.10 && m.yes_price < 0.90) score += 8;
+
+          // Penalize extreme prices (near 0 or 1 = already resolved)
+          if (m.yes_price < 0.05 || m.yes_price > 0.95) score -= 50;
+
+          return { market: m, score };
+        })
+        .filter(s => s.score > 5)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
+
+        if (scored.length === 0) {
+          console.log("  No markets passed pre-filter threshold");
+          telemetryCouncilSkip("no_markets_passed_prefilter");
+          return;
+        }
+        console.log(`  Pre-filter: ${scored.length}/${liquid.length} short-term markets qualify (scores: ${scored.map(s => s.score.toFixed(0)).join(", ")})`);
+
+        for (const { market, score: preFilterScore } of scored) {
+          await sleep(500); // Reduced from 2s — Haiku is fast and cheap
           try {
+            // Log time to expiry for visibility
+            const hoursLeft = market.end_date ? Math.max(0, (new Date(market.end_date).getTime() - Date.now()) / (1000 * 60 * 60)) : -1;
+            const timeLabel = hoursLeft < 0 ? "unknown" : hoursLeft < 1 ? `${Math.round(hoursLeft * 60)}min` : hoursLeft < 24 ? `${hoursLeft.toFixed(1)}h` : `${(hoursLeft / 24).toFixed(1)}d`;
+
             const yesPrice = market.yes_price;
             const noPrice = market.no_price;
-            const yesTokenId = market.yes_token_id;
-            const noTokenId = market.no_token_id;
 
-            // Fuse alpha sources
-            const alpha = await getFusedAlpha(market.condition_id, market.question, yesTokenId, 5);
+            const alpha = await getFusedAlpha(market.condition_id, market.question, market.yes_token_id, 5);
 
-            if (alpha.news_signals.length > 0) {
-              console.log(`  📰 ${alpha.news_signals.length} news signals: ${alpha.news_signals[0].reasoning.slice(0, 80)}`);
-            }
-            if (alpha.whale_convergence) {
-              console.log(`  🐋 ${alpha.whale_convergence.whale_count} whales on ${alpha.whale_convergence.direction}`);
-            }
-            if (alpha.microstructure_signal) {
-              console.log(`  📊 ${alpha.microstructure_signal.signal_type}: ${alpha.microstructure_signal.reasoning}`);
-            }
             if (alpha.execution && !alpha.execution.should_execute) {
-              console.log(`  ⛔ Orderbook rejected: ${alpha.execution.warnings.join(", ")}`);
+              logRejectedSignal({ ticker: market.condition_id, strategy: "mispricing", direction: "SKIP", edge: 0, confidence: 0, reject_reason: `orderbook_rejected: ${alpha.execution.warnings.join(", ")}`, market_question: market.question, price: yesPrice });
               continue;
             }
 
-            console.log(`  ⚖️  Council on: ${market.question.slice(0, 60)}...`);
-            const verdict = await deliberate(market.question, market.description, yesPrice, noPrice, market.category, bankroll);
+            // ── CACHE CHECK: Don't re-analyze the same market at similar price ──
+            const priceKey = `${Math.round(yesPrice * 20)}`; // Bucket by 5-cent increments
+            const cached = getCachedVerdict(market.condition_id, priceKey);
+            let verdict: any;
+
+            if (cached) {
+              verdict = cached;
+              console.log(`  ⚡ Cache hit: ${market.question.slice(0, 50)}... (saved ~$0.30)`);
+            } else {
+              console.log(`  ⚖️  Council on: ${market.question.slice(0, 55)}... [${timeLabel}]`);
+              verdict = await deliberate(market.question, market.description, yesPrice, noPrice, market.category, bankroll);
+              // Cache for 30 min (longer for low-score markets, shorter for hot ones)
+              const cacheTtl = preFilterScore > 30 ? 20 : 40;
+              setCachedVerdict(market.condition_id, priceKey, verdict, cacheTtl);
+            }
 
             latestVerdict = {
               question: market.question,
@@ -308,23 +939,50 @@ async function main() {
             console.log(`     ${verdict.verdict} ${verdict.direction} | Agreement: ${(verdict.council_agreement * 100).toFixed(0)}% | Edge: ${(verdict.edge * 100).toFixed(1)}%`);
 
             if (!verdict.should_trade) {
-              console.log(`     ⏭️  PASS`);
+              telemetryCouncilDeliberation(false);
+              logRejectedSignal({ ticker: market.condition_id, strategy: "mispricing", direction: verdict.direction, edge: verdict.edge, confidence: verdict.confidence, reject_reason: "council_no_trade", market_question: market.question, price: yesPrice });
+              councilConsecutivePasses++;
+              if (councilConsecutivePasses >= 10 && councilIntervalMs < 10 * 60 * 1000) {
+                councilIntervalMs = 10 * 60 * 1000;
+                startCouncilTimer();
+                console.log("  📉 Council slowed to 10m (10 consecutive passes)");
+              }
               continue;
             }
 
             const price = verdict.direction === "YES" ? yesPrice : noPrice;
-            const baseSize = calculatePosition(Math.abs(verdict.edge), price, bankroll, "mispricing");
-            let size = applyWeightToSize("mispricing", baseSize) * verdict.size_multiplier;
 
+            const calibFactor = getCalibrationFactor("mispricing");
+            let size = calculatePosition(Math.abs(verdict.edge), price, bankroll, "mispricing", {
+              confidence: verdict.confidence,
+              calibration_factor: calibFactor,
+              consecutive_wins: consecutiveWins,
+            });
+            size *= verdict.size_multiplier;
+
+            // Confirmation boosts
             if (alpha.combined_direction_hint === verdict.direction) {
-              size *= 1.2;
-              console.log(`     💪 Alpha confirms council → +20% size`);
+              size *= 1.25;
+              console.log(`     💪 Alpha confirms → +25% size`);
             }
+            const oddsSignal = hotMarkets.find(h => h.ticker === market.condition_id);
+            if (oddsSignal && oddsSignal.direction === verdict.direction) {
+              size *= 1.15;
+              console.log(`     📈 Smart money confirms → +15% size`);
+            }
+
             if (alpha.execution) size = Math.min(size, alpha.execution.max_size_usd);
-            if (size < 0.5) continue;
+            if (size < 0.50) continue;
 
             for (const ns of alpha.news_signals) markActedOn(ns.news_id);
 
+            telemetryCouncilDeliberation(true);
+            councilConsecutivePasses = 0;
+            if (councilIntervalMs > config.CLAUDE_SCAN_INTERVAL_MS) {
+              councilIntervalMs = config.CLAUDE_SCAN_INTERVAL_MS;
+              startCouncilTimer();
+              console.log("  📈 Council reset to 5m (trade executed)");
+            }
             await executeTrade(kalshi, {
               strategy: "mispricing",
               category: market.category,
@@ -337,6 +995,7 @@ async function main() {
               confidence: verdict.confidence,
               councilVerdict: verdict,
               hypothesisName: verdict.council_agreement > 0.8 ? "council_unanimous_wins" : "mispricing_high_edge_wins",
+              predicted_prob: verdict.direction === "YES" ? verdict.edge + yesPrice : 1 - noPrice - verdict.edge,
             });
           } catch (err: any) {
             console.error(`     Council error: ${err.message}`);
@@ -344,25 +1003,142 @@ async function main() {
         }
       } catch (err: any) { console.error(`Mispricing: ${err.message}`); }
     };
+    const startCouncilTimer = () => {
+      if (councilTimer) clearInterval(councilTimer);
+      councilTimer = setInterval(runCouncil, councilIntervalMs);
+    };
     setTimeout(runCouncil, 15000);
-    setInterval(runCouncil, config.CLAUDE_SCAN_INTERVAL_MS);
-    console.log("🧠 Alpha-aware Council armed");
+    startCouncilTimer();
+    console.log("🧠 Council armed (bankroll-gated, cached, pre-filtered)");
   }
 
-  // ═══ Strategy 4: Cross-Platform Divergence ═══
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 4: Economic Release (FRED-powered)
+  // ═══════════════════════════════════════════════════
+  if (config.STRATEGY_ECONOMIC) {
+    const runEconomic = async () => {
+      try {
+        if (paused) return;
+        const { ok } = canTrade(bankroll, openPositionCount);
+        if (!ok) return;
+
+        const signals = await scanEconomicMarkets(kalshi);
+        logScanStart("economic_release", signals.length);
+        if (signals.length === 0) telemetryNoEdge("economic_release");
+
+        if (signals.length > 0) {
+          console.log(`\n📊 Economic: ${signals.length} FRED-powered signals`);
+        }
+
+        for (const sig of signals.slice(0, 2)) {
+          telemetryEvaluated("economic_release");
+          if (!meetsEdgeThreshold(sig.edge, bankroll, "economic_release")) {
+            telemetryBelowThreshold("economic_release");
+            logRejectedSignal({ ticker: sig.ticker, strategy: "economic_release", direction: sig.fred_implied_direction, edge: sig.edge, confidence: sig.confidence, reject_reason: "edge_below_threshold", market_question: sig.release_name, price: sig.market_implied_prob });
+            continue;
+          }
+
+          const price = sig.fred_implied_direction === "YES" ? sig.market_implied_prob : 1 - sig.market_implied_prob;
+          const size = calculatePosition(sig.edge, price, bankroll, "economic_release", {
+            confidence: sig.confidence,
+            consecutive_wins: consecutiveWins,
+          });
+          if (size < 0.50) { telemetrySizeMin("economic_release"); continue; }
+
+          await executeTrade(kalshi, {
+            strategy: "economic_release",
+            category: sig.category,
+            question: sig.release_name,
+            ticker: sig.ticker,
+            direction: sig.fred_implied_direction,
+            price, size,
+            reasoning: sig.reasoning,
+            edge: sig.edge,
+            confidence: sig.confidence,
+            hypothesisName: "fred_data_edge",
+          });
+          telemetryTraded("economic_release");
+        }
+        logScanComplete("economic_release");
+      } catch {}
+    };
+    setTimeout(runEconomic, 25000);
+    setInterval(runEconomic, 300000); // Every 5 min
+    console.log("📊 Economic release scanner armed (FRED-powered, 5m scan)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 5: Weather Edge (NWS-powered)
+  // ═══════════════════════════════════════════════════
+  if (config.STRATEGY_WEATHER) {
+    const runWeather = async () => {
+      try {
+        if (paused) return;
+        const { ok } = canTrade(bankroll, openPositionCount);
+        if (!ok) return;
+
+        const signals = await scanWeatherMarkets(kalshi);
+        logScanStart("weather_edge", signals.length);
+        if (signals.length === 0) telemetryNoEdge("weather_edge");
+
+        if (signals.length > 0) {
+          console.log(`\n🌤️ Weather: ${signals.length} NWS-powered signals`);
+        }
+
+        for (const sig of signals.slice(0, 2)) {
+          telemetryEvaluated("weather_edge");
+          if (Math.abs(sig.edge) < 0.08) { telemetryBelowThreshold("weather_edge"); continue; }
+
+          const price = sig.direction === "YES" ? sig.market_implied_prob : 1 - sig.market_implied_prob;
+          const size = calculatePosition(Math.abs(sig.edge), price, bankroll, "weather_edge", {
+            confidence: sig.confidence,
+            consecutive_wins: consecutiveWins,
+          });
+          if (size < 0.50) { telemetrySizeMin("weather_edge"); continue; }
+
+          await executeTrade(kalshi, {
+            strategy: "weather_edge",
+            category: "weather",
+            question: sig.question,
+            ticker: sig.ticker,
+            direction: sig.direction,
+            price, size,
+            reasoning: sig.reasoning,
+            edge: Math.abs(sig.edge),
+            confidence: sig.confidence,
+            hypothesisName: "nws_forecast_edge",
+          });
+          telemetryTraded("weather_edge");
+        }
+        logScanComplete("weather_edge");
+      } catch {}
+    };
+    setTimeout(runWeather, 30000);
+    setInterval(runWeather, 600000); // Every 10 min
+    console.log("🌤️ Weather edge scanner armed (NWS-powered, 10m scan)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 6: Cross-Platform Divergence
+  // ═══════════════════════════════════════════════════
   {
     const runCrossPlatform = async () => {
       try {
         if (paused) return;
         const divergences = await scanCrossPlatformDivergences(kalshi);
+        logScanStart("cross_platform", divergences.length);
+        if (divergences.length === 0) telemetryNoEdge("cross_platform");
         for (const d of divergences.slice(0, 2)) {
-          const { ok } = canTrade(bankroll, openPositions);
-          if (!ok) break;
+          telemetryEvaluated("cross_platform");
+          const { ok } = canTrade(bankroll, openPositionCount);
+          if (!ok) { telemetryBlocked("cross_platform"); break; }
 
           const price = d.trade_direction === "YES" ? d.kalshi_yes_price : (1 - d.kalshi_yes_price);
-          const baseSize = calculatePosition(Math.abs(d.divergence), price, bankroll, "cross_platform");
-          const size = applyWeightToSize("cross_platform", baseSize);
-          if (size < 0.5) continue;
+          const size = calculatePosition(Math.abs(d.divergence), price, bankroll, "cross_platform", {
+            confidence: d.confidence,
+            consecutive_wins: consecutiveWins,
+          });
+          if (size < 0.50) { telemetrySizeMin("cross_platform"); continue; }
 
           await executeTrade(kalshi, {
             strategy: "cross_platform",
@@ -373,21 +1149,297 @@ async function main() {
             price, size,
             reasoning: d.reasoning,
             edge: Math.abs(d.divergence),
-            confidence: 0.7,
+            confidence: d.confidence,
             hypothesisName: "cross_platform_convergence",
           });
+          telemetryTraded("cross_platform");
         }
+        logScanComplete("cross_platform");
       } catch {}
     };
     setTimeout(runCrossPlatform, 20000);
     setInterval(runCrossPlatform, config.CROSS_PLATFORM_SCAN_INTERVAL_MS);
-    console.log("🌐 Cross-platform divergence scanner armed");
+    console.log("🌐 Cross-platform divergence scanner armed (3m scan)");
   }
 
-  console.log(`\n✅ ALL SYSTEMS LIVE\n`);
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 7: Market Maker (spread capture)
+  // ═══════════════════════════════════════════════════
+  if (config.STRATEGY_MARKET_MAKER && !getPhaseParams(bankroll).aggressive) {
+    // Only market-make when bankroll > $100 (not in beast mode)
+    const runMarketMaker = async () => {
+      try {
+        if (paused) return;
+        if (bankroll < 100) return; // Need enough capital to post both sides
+
+        const opportunities = await findMarketMakingOpportunities(kalshi, bankroll);
+        if (opportunities.length > 0) {
+          console.log(`\n💹 Market Maker: ${opportunities.length} wide-spread markets`);
+        }
+
+        for (const opp of opportunities.slice(0, 2)) {
+          if (!config.DRY_RUN) {
+            await placeMarketMakerOrders(kalshi, opp, bankroll);
+          }
+          console.log(`  💹 Posted ${opp.ticker}: bid ${opp.yes_bid_price}¢ / ask ${opp.yes_ask_price}¢ (spread: ${opp.spread_cents}¢)`);
+        }
+
+        // Manage existing inventory
+        await manageInventory(kalshi, bankroll);
+      } catch {}
+    };
+    setTimeout(runMarketMaker, 35000);
+    setInterval(runMarketMaker, config.MARKET_MAKER_REFRESH_MS);
+    console.log("💹 Market maker armed (wide spreads, 2m refresh)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 8: High-Confidence Near-Close (85-94¢)
+  // ═══════════════════════════════════════════════════
+  // Research-backed: buy near-certain outcomes closing soon.
+  // Zero API cost, high win rate, rapid turnover.
+  if (config.STRATEGY_HIGH_CONFIDENCE) {
+    let hcTradesToday = 0;
+    let hcLastResetDay = new Date().getUTCDate();
+
+    const runHighConfidence = async () => {
+      try {
+        if (paused) return;
+        const { ok } = canTrade(bankroll, openPositionCount);
+        if (!ok) return;
+
+        // Reset daily counter
+        const today = new Date().getUTCDate();
+        if (today !== hcLastResetDay) { hcTradesToday = 0; hcLastResetDay = today; }
+        if (hcTradesToday >= config.HIGH_CONFIDENCE_MAX_TRADES) return;
+
+        const signals = await scanHighConfidence(kalshi, cachedMarkets);
+        logScanStart("high_confidence", signals.length);
+        if (signals.length === 0) { telemetryNoEdge("high_confidence"); return; }
+
+        for (const sig of signals.slice(0, 2)) {
+          if (hcTradesToday >= config.HIGH_CONFIDENCE_MAX_TRADES) break;
+          telemetryEvaluated("high_confidence");
+
+          // Fixed small position size — these are low-edge high-probability trades
+          const size = Math.min(bankroll * 0.08, 5); // $5 max or 8% of bankroll
+          if (size < 0.50) { telemetrySizeMin("high_confidence"); continue; }
+
+          await executeTrade(kalshi, {
+            strategy: "high_confidence",
+            category: "high_confidence",
+            question: sig.question,
+            ticker: sig.ticker,
+            direction: sig.direction,
+            price: sig.price,
+            size,
+            reasoning: sig.reasoning,
+            edge: sig.expected_profit_pct,
+            confidence: sig.confidence,
+            hypothesisName: "high_confidence_near_close",
+          });
+          telemetryTraded("high_confidence");
+          pushActivity("🎯", `High-conf: ${sig.ticker} ${sig.direction} @ ${(sig.price * 100).toFixed(0)}¢`);
+          hcTradesToday++;
+        }
+        logScanComplete("high_confidence");
+      } catch {}
+    };
+    setTimeout(runHighConfidence, 5000);
+    setInterval(runHighConfidence, config.HIGH_CONFIDENCE_SCAN_INTERVAL_MS);
+    console.log("🎯 High-confidence near-close scanner armed (1m scan, 85-94¢)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // STRATEGY 9: Multi-Model Ensemble (Claude + GPT-4o)
+  // ═══════════════════════════════════════════════════
+  // Research-backed: weighted LLM ensemble for probability estimation.
+  // Unlocks at $500+ (Sapling phase) — API costs justified at scale.
+  if (config.STRATEGY_MULTI_MODEL) {
+    const runMultiModel = async () => {
+      try {
+        if (paused) return;
+
+        // BANKROLL GATE: requires $500+ to justify dual-model API costs
+        if (bankroll < 500) return;
+        if (!isStrategyUnlocked("multi_model_ensemble", bankroll)) return;
+
+        const { ok } = canTrade(bankroll, openPositionCount);
+        if (!ok) return;
+
+        // Use cached markets, pre-filter for tradeable range
+        const candidates = cachedMarkets
+          .filter(m => m.yes_price > 0.15 && m.yes_price < 0.85) // mid-range = most edge potential
+          .filter(m => {
+            if (!m.end_date) return true;
+            const hoursLeft = (new Date(m.end_date).getTime() - Date.now()) / (1000 * 60 * 60);
+            return hoursLeft > 1 && hoursLeft < 72;
+          })
+          .slice(0, 5)
+          .map(m => ({
+            ticker: m.condition_id,
+            question: m.question,
+            description: m.description,
+            yes_price: m.yes_price,
+            category: m.category,
+            close_time: m.end_date,
+          }));
+
+        if (candidates.length === 0) return;
+
+        console.log(`\n🤖 Multi-Model Ensemble: evaluating ${candidates.length} markets`);
+        const signals = await scanWithEnsemble(candidates, config.MULTI_MODEL_MIN_EDGE);
+        logScanStart("multi_model_ensemble", signals.length);
+
+        if (signals.length === 0) { telemetryNoEdge("multi_model_ensemble"); return; }
+
+        for (const sig of signals.slice(0, 2)) {
+          telemetryEvaluated("multi_model_ensemble");
+
+          const price = sig.direction === "YES" ? sig.market_probability : (1 - sig.market_probability);
+          const size = calculatePosition(Math.abs(sig.edge), price, bankroll, "multi_model_ensemble", {
+            confidence: sig.confidence,
+            consecutive_wins: consecutiveWins,
+          });
+          if (size < 1.00) { telemetrySizeMin("multi_model_ensemble"); continue; }
+
+          await executeTrade(kalshi, {
+            strategy: "multi_model_ensemble",
+            category: "ensemble",
+            question: sig.question,
+            ticker: sig.ticker,
+            direction: sig.direction,
+            price,
+            size,
+            reasoning: sig.reasoning,
+            edge: Math.abs(sig.edge),
+            confidence: sig.confidence,
+            hypothesisName: "multi_model_consensus",
+          });
+          telemetryTraded("multi_model_ensemble");
+          pushActivity("🤖", `Ensemble: ${sig.ticker} ${sig.direction} (${sig.model_estimates.map(e => `${e.model}:${(e.probability*100).toFixed(0)}%`).join("+")})`);
+        }
+        logScanComplete("multi_model_ensemble");
+      } catch {}
+    };
+    setTimeout(runMultiModel, 45000);
+    setInterval(runMultiModel, config.MULTI_MODEL_SCAN_INTERVAL_MS);
+    console.log("🤖 Multi-model ensemble armed (5m scan, unlocks at $500+)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ODDS MOVEMENT SCANNER (background signal)
+  // ═══════════════════════════════════════════════════
+  {
+    const runOddsCheck = async () => {
+      try {
+        const movements = getOddsMovementSignals(cachedMarkets);
+        const strong = movements.filter(m => m.signal_strength === "strong");
+        if (strong.length > 0) {
+          console.log(`\n📈 ODDS ALERT: ${strong.length} markets with strong price movement`);
+          for (const s of strong.slice(0, 3)) {
+            console.log(`  📈 ${s.ticker}: ${s.velocity_1h > 0 ? "+" : ""}${s.velocity_1h.toFixed(1)}¢/hr → ${s.direction} (${s.reasoning})`);
+          }
+        }
+      } catch {}
+    };
+    setInterval(runOddsCheck, 120000);  // Check every 2 min
+    console.log("📈 Odds movement detector armed (2m check)");
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ADAPTIVE OPTIMIZATION (every 30 min)
+  // Analyzes trade history and adjusts parameters
+  // ═══════════════════════════════════════════════════
+  setInterval(() => {
+    try {
+      const optimal = getOptimalParameters();
+      if (optimal.sample_size > 0) {
+        console.log(`  🧬 Adaptive optimizer: confidence=${optimal.optimal_confidence_threshold.toFixed(2)}, confluence=${optimal.optimal_min_confluence}, max_pos=${optimal.optimal_max_positions}, sample=${optimal.sample_size}`);
+      }
+    } catch {}
+  }, 30 * 60 * 1000);
+  console.log("🧬 Adaptive optimizer armed (30m analysis cycle)");
+
+  // ═══════════════════════════════════════════════════
+  // STALE PRICE SNIPING (piggybacks on sniper interval)
+  // Detects when Kalshi prices lag behind Binance moves
+  // ═══════════════════════════════════════════════════
+  {
+    const runStaleSniper = async () => {
+      try {
+        if (paused) return;
+        const { ok } = canTrade(bankroll, openPositionCount);
+        if (!ok) return;
+
+        for (const sym of ["btcusdt", "ethusdt", "solusdt", "xrpusdt"]) {
+          const asset = sym.replace("usdt", "").toUpperCase();
+          const turboPrefix = `KX${asset}15M`;
+          const nearbyMarkets = cachedMarkets.filter(m =>
+            m.condition_id.startsWith(turboPrefix) &&
+            m.yes_price > 0.10 && m.yes_price < 0.90
+          );
+
+          for (const m of nearbyMarkets.slice(0, 3)) {
+            // Estimate minutes remaining from end_date
+            const minutesLeft = m.end_date
+              ? Math.max(0, (new Date(m.end_date).getTime() - Date.now()) / 60000)
+              : 15;
+            if (minutesLeft <= 0 || minutesLeft > 60) continue;
+
+            // Extract strike price from ticker (e.g., KXBTC15M-25APR11-100000-T1234)
+            const strikeMatch = m.condition_id.match(/(\d{4,})-T/);
+            const strikePrice = strikeMatch ? parseFloat(strikeMatch[1]) : 0;
+            if (strikePrice <= 0) continue;
+
+            const stale = detectStalePrice(m.yes_price, 1 - m.yes_price, strikePrice, asset, minutesLeft);
+            if (stale && stale.confidence > 0.55) {
+              const price = stale.direction === "YES" ? m.yes_price : (1 - m.yes_price);
+              const size = calculatePosition(stale.divergence_pct / 100, price, bankroll, "hourly_sniper", {
+                confidence: stale.confidence,
+                consecutive_wins: consecutiveWins,
+              });
+              if (size < 0.50) continue;
+
+              await executeTrade(kalshi, {
+                strategy: "hourly_sniper",
+                category: "crypto",
+                question: m.question ?? m.condition_id,
+                ticker: m.condition_id,
+                direction: stale.direction,
+                price,
+                size,
+                reasoning: `Stale price: Binance=${stale.binance_price}, Kalshi implied=${stale.kalshi_implied_price}, divergence=${stale.divergence_pct.toFixed(1)}%`,
+                edge: stale.divergence_pct / 100,
+                confidence: stale.confidence,
+                hypothesisName: "stale_price_snipe",
+              });
+              pushActivity("🎯", `Stale price snipe: ${m.condition_id} ${stale.direction}`);
+            }
+          }
+        }
+      } catch {}
+    };
+    setInterval(runStaleSniper, 20000); // Every 20s
+    console.log("🎯 Stale price sniper armed (20s scan)");
+  }
+
+  console.log(`\n✅ ALL 14 SYSTEMS LIVE`);
   console.log(`📱 Dashboard: http://localhost:${dashboardPort}`);
-  console.log(`📱 Pin to iOS home screen for native-like experience\n`);
+  console.log(`🎯 Goal: $${bankroll.toFixed(2)} → $10,000+ via aggressive compounding\n`);
+
+  // Print compound growth projections
+  const { getCompoundingProjection } = await import("./core/aggressive_kelly.js");
+  const projections = getCompoundingProjection(bankroll, 0.08, 10, 30); // 8% edge, 10 trades/day, 30 days
+  console.log("  📊 Growth projections (8% avg edge, 10 trades/day):");
+  console.log(`     Day 7:  $${projections[7]?.toFixed(2) ?? "N/A"}`);
+  console.log(`     Day 14: $${projections[14]?.toFixed(2) ?? "N/A"}`);
+  console.log(`     Day 30: $${projections[30]?.toFixed(2) ?? "N/A"}\n`);
 }
+
+// ═══════════════════════════════════════════════════
+// EXECUTION ENGINE
+// ═══════════════════════════════════════════════════
 
 async function executeTrade(kalshi: KalshiClient, params: {
   strategy: string; category: string;
@@ -396,17 +1448,62 @@ async function executeTrade(kalshi: KalshiClient, params: {
   reasoning: string; edge: number; confidence: number;
   councilVerdict?: any;
   hypothesisName?: string;
+  predicted_prob?: number;
 }) {
+  // ── Turbo-only mode: block all non-turbo trades ──
+  const TURBO_PREFIXES = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"];
+  if (config.TURBO_ONLY_MODE) {
+    const isTurbo = TURBO_PREFIXES.some(p => params.ticker.startsWith(p));
+    if (!isTurbo) {
+      console.log(`  🚫 Turbo-only mode: blocked ${params.strategy} on ${params.ticker.slice(0, 30)}`);
+      return;
+    }
+  }
+
   const signalId = genSignalId(params.strategy);
   const tag = ({
-    hourly_sniper: "⚡",
-    monotonicity_arb: "📐",
-    mispricing: "🧠",
-    cross_platform: "🌐",
+    hourly_sniper: "⚡", monotonicity_arb: "📐", mispricing: "🧠",
+    cross_platform: "🌐", economic_release: "📊", weather_edge: "🌤️",
+    market_maker: "💹",
   } as any)[params.strategy] ?? "📊";
   const w = getWeight(params.strategy);
+  const phase = getPhaseParams(bankroll);
 
-  console.log(`  ${config.DRY_RUN ? "🧪" : "🔴"}${tag} ${params.direction} $${params.size.toFixed(2)} @ $${params.price.toFixed(2)} [${params.strategy} w:${w?.weight.toFixed(2) ?? "1.00"}]`);
+  // ── Circuit Breaker: stop trading after consecutive losses ──
+  const cb = canTradeCircuitBreaker();
+  if (!cb.ok) {
+    console.log(`  🛑 Circuit breaker: ${cb.reason}`);
+    return;
+  }
+  if (cb.size_multiplier < 1) {
+    params.size *= cb.size_multiplier;
+    console.log(`  ⚠️ Circuit breaker: size reduced to ${(cb.size_multiplier * 100).toFixed(0)}%`);
+  }
+
+  // ── Time-of-Day profiling: adjust confidence based on historical win rate by hour ──
+  const timeAdvice = getTimeAdvice();
+  if (!timeAdvice.should_trade) {
+    console.log(`  🕐 Time filter: ${timeAdvice.reason}`);
+    return;
+  }
+  if (timeAdvice.confidence_multiplier !== 1.0) {
+    params.size *= timeAdvice.confidence_multiplier;
+  }
+
+  // ── Correlation discount: reduce size for correlated positions ──
+  const positions = getOpenPositions();
+  const openPosForCorr = positions.map((p: any) => ({
+    asset: p.ticker,
+    direction: p.side,
+    size_usd: p.size_usd ?? 1,
+  }));
+  const corrDiscount = correlationDiscount(params.ticker, params.direction, openPosForCorr);
+  if (corrDiscount < 1) {
+    params.size *= corrDiscount;
+    console.log(`  🔗 Correlation discount: ${(corrDiscount * 100).toFixed(0)}% (correlated with open positions)`);
+  }
+
+  console.log(`  ${config.DRY_RUN ? "🧪" : "🔴"}${tag} ${params.direction} $${params.size.toFixed(2)} @ $${params.price.toFixed(2)} [${params.strategy} w:${w?.weight.toFixed(2) ?? "1.00"} | ${phase.label}]`);
 
   recordSignal({
     signal_id: signalId, strategy: params.strategy,
@@ -424,11 +1521,52 @@ async function executeTrade(kalshi: KalshiClient, params: {
     confidence: params.confidence, verdict: params.councilVerdict,
   });
 
+  // Compound engine: check strategy unlock and capital cap
+  if (!isStrategyUnlocked(params.strategy, bankroll)) {
+    console.log(`  🔒 ${params.strategy} locked at current bankroll`);
+    return;
+  }
+  const allocation = allocateCapital(params.strategy, params.size, bankroll);
+  if (allocation.size <= 0) {
+    console.log(`  🔒 ${params.strategy}: ${allocation.reason}`);
+    return;
+  }
+  if (allocation.capped) {
+    params.size = allocation.size;
+    console.log(`  📏 ${params.strategy} size capped: ${allocation.reason}`);
+  }
+
+  // Velocity engine: try to allocate a tranche (non-blocking — trade proceeds even without tranche)
+  const velocityResult = velocityAllocateTrade({
+    ticker: params.ticker,
+    side: params.direction,
+    entryPrice: params.price,
+    contracts: Math.max(1, Math.floor(params.size / params.price)),
+    sizeUsd: params.size,
+    edge: params.edge,
+    positionId: signalId,
+  });
+
+  if (!velocityResult) {
+    console.log(`  ⚡ Velocity: no tranche available — proceeding without velocity management`);
+  } else if (!velocityResult.passthrough) {
+    // Use velocity-allocated size (may be smaller if tranche capital is limited)
+    const velocitySize = velocityResult.capital_usd;
+    if (velocitySize < params.size) {
+      params.size = velocitySize;
+      console.log(`  ⚡ Velocity: tranche #${velocityResult.tranche_id} capped size to $${velocitySize.toFixed(2)}`);
+    }
+  }
+
   let result: any;
+  const count = Math.max(1, Math.floor(params.size / params.price));
+
   if (config.DRY_RUN) {
     result = { status: "dry_run", ticker: params.ticker, direction: params.direction, size: params.size };
   } else {
-    const count = Math.max(1, Math.floor(params.size / params.price));
+    // Use limit orders at current price — fills immediately if liquidity exists
+    // post_only removed: it caused "post only cross" rejections on every trade
+    // because our limit price equals the current ask (we WANT to cross the spread)
     result = await kalshi.placeOrder({
       ticker: params.ticker,
       side: params.direction === "YES" ? "yes" : "no",
@@ -436,9 +1574,8 @@ async function executeTrade(kalshi: KalshiClient, params: {
       type: "limit",
       count,
       yes_price: params.direction === "YES" ? Math.floor(params.price * 100) : undefined,
-      no_price: params.direction === "NO" ? Math.floor((1 - params.price) * 100) : undefined,
+      no_price: params.direction === "NO" ? Math.floor(params.price * 100) : undefined,
       client_order_id: signalId,
-      post_only: true,
     });
   }
 
@@ -450,11 +1587,25 @@ async function executeTrade(kalshi: KalshiClient, params: {
     dry_run: config.DRY_RUN, order_response: JSON.stringify(result),
   });
 
-  totalTrades++;
-  openPositions++;
+  // Track open position for exit management
+  openPosition({
+    ticker: params.ticker,
+    order_id: result?.order?.order_id ?? signalId,
+    side: params.direction,
+    entry_price: Math.round(params.price * 100),  // Store in cents to match position_manager
+    contracts: count,
+    size_usd: params.size,
+    strategy: params.strategy,
+    predicted_prob: params.predicted_prob,
+    market_question: params.question,
+  });
 
+  totalTrades++;
+  openPositionCount++;
+
+  // DRY_RUN simulation — faster resolution for aggressive testing
   if (config.DRY_RUN) {
-    const holdMs = 2 * 60 * 1000 + Math.random() * 3 * 60 * 1000;
+    const holdMs = 60 * 1000 + Math.random() * 120 * 1000;  // 1-3 min (faster feedback loop)
     setTimeout(() => simulateResolution(signalId, params), holdMs);
   }
 
@@ -466,18 +1617,61 @@ async function executeTrade(kalshi: KalshiClient, params: {
 }
 
 function simulateResolution(signalId: string, params: any) {
+  // Calibrated win probabilities per strategy
   const winProbs: Record<string, number> = {
-    hourly_sniper: 0.85, monotonicity_arb: 0.95, mispricing: 0.68,
-    cross_platform: 0.72, economic_release: 0.60, weather_edge: 0.55,
+    hourly_sniper: 0.82,
+    monotonicity_arb: 0.95,
+    mispricing: 0.62,
+    cross_platform: 0.68,
+    economic_release: 0.65,
+    weather_edge: 0.60,
+    market_maker: 0.70,
   };
-  const winProb = winProbs[params.strategy] ?? 0.60;
+
+  const winProb = winProbs[params.strategy] ?? 0.55;
   const won = Math.random() < winProb;
   const pnl = won
-    ? params.size * (params.edge || 0.10) * (0.8 + Math.random() * 0.4)
-    : -params.size * (0.5 + Math.random() * 0.5);
+    ? params.size * (params.edge || 0.08) * (0.8 + Math.random() * 0.4)
+    : -params.size * (0.3 + Math.random() * 0.4);
 
-  bankroll += pnl;
-  openPositions--;
+  if (config.DRY_RUN) {
+    bankroll += pnl; // paper trading accumulator
+  }
+  // Note: in live mode, the next sync loop cycle will update bankroll from Kalshi
+  openPositionCount = Math.max(0, openPositionCount - 1);
+  updateCompoundState(bankroll);
+  recordStrategyYield(params.strategy, pnl);
+  velocityReleaseTranche(signalId, pnl);
+
+  // ── Genius layer feedback ──
+  recordTradeResult(won);  // Circuit breaker tracking
+  recordTimeProfile(new Date().getUTCHours(), won, pnl);  // Time-of-day profiling
+  recordSignalOutcome({  // Signal backtesting
+    strategy: params.strategy,
+    ticker: params.ticker,
+    direction: params.direction,
+    confidence: params.confidence,
+    confluence_score: 0,
+    regime: getCurrentRegime()?.regime ?? "unknown",
+    hour_utc: new Date().getUTCHours(),
+    traded: true,
+    won,
+    pnl,
+  });
+
+  // ── Tax lot tracking ──
+  try {
+    recordTaxLot(params.ticker, params.direction === "YES" ? "yes" : "no", params.price, Math.max(1, Math.floor(params.size / params.price)));
+    if (won || !won) { // Close lot on resolution
+      closeTaxLot(params.ticker, params.direction === "YES" ? "yes" : "no", params.price + (pnl / Math.max(1, Math.floor(params.size / params.price))), Math.max(1, Math.floor(params.size / params.price)));
+    }
+  } catch {}
+
+  if (won) {
+    consecutiveWins++;
+  } else {
+    consecutiveWins = 0;
+  }
 
   reflexLoop({
     signalId, strategy: params.strategy, asset: null, category: params.category,
@@ -493,7 +1687,29 @@ function simulateResolution(signalId: string, params: any) {
     marketResolvedYES: (params.direction === "YES" && won) || (params.direction === "NO" && !won),
   });
 
-  console.log(`     ${won ? "✅" : "❌"} ${params.strategy} ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} | $${bankroll.toFixed(2)}`);
+  const emoji = won ? "✅" : "❌";
+  const streak = consecutiveWins > 2 ? ` 🔥×${consecutiveWins}` : "";
+  console.log(`     ${emoji} ${params.strategy} ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} | $${bankroll.toFixed(2)}${streak}`);
+
+  checkMilestoneInline();
+}
+
+function checkMilestoneInline() {
+  if (bankroll >= nextMilestone) {
+    const daysFromStart = (Date.now() - startTime) / (1000 * 60 * 60 * 24);
+    logMilestone(nextMilestone, bankroll, totalTrades, daysFromStart, {});
+    notifyMilestone(nextMilestone, bankroll, totalTrades);
+    nextMilestone = config.MILESTONES.find(m => m > bankroll) ?? nextMilestone * 2;
+  }
+
+  // Check auto-withdrawal at milestones
+  const withdrawal = checkAutoWithdrawal(bankroll, config.STARTING_BANKROLL);
+  if (withdrawal?.should_withdraw) {
+    console.log(`  💰 AUTO-WITHDRAWAL SUGGESTED: $${withdrawal.amount.toFixed(2)} → nest egg`);
+    console.log(`     Reason: ${withdrawal.reason}`);
+    console.log(`     Remaining bankroll: $${withdrawal.remaining_bankroll.toFixed(2)}`);
+    pushActivity("💰", `Withdrawal suggested: $${withdrawal.amount.toFixed(2)} → nest egg (confirm via chat)`);
+  }
 }
 
 main().catch((err) => { console.error("Fatal:", err); process.exit(1); });

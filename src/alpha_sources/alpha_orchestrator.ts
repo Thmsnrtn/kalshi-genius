@@ -12,12 +12,13 @@
 // - Order book analysis: on-demand per market (every trade attempt)
 // - Signal fusion: every 1 minute
 
-import { 
-  initNewsIntelligence, 
-  runNewsIntelligenceCycle, 
+import {
+  initNewsIntelligence,
+  runNewsIntelligenceCycle,
+  fetchAllFeeds,
   getActiveNewsSignals,
   markSignalActedOn,
-  type NewsSignal 
+  type NewsSignal
 } from "./news_intelligence.js";
 
 import { 
@@ -68,10 +69,22 @@ export function initAlphaSources() {
 }
 
 // ── Start the alpha source loops ──
-export function startAlphaSources(getActiveMarkets: () => string[]) {
+export function startAlphaSources(getActiveMarkets: () => string[], getBankroll?: () => number) {
   // News intelligence: every 2 minutes
   const runNews = async () => {
     try {
+      // Bankroll gate: skip Claude classification when below $100 (Sprout phase)
+      // RSS feeds still run — only the Claude API call is gated
+      const currentBankroll = getBankroll?.() ?? 0;
+      if (currentBankroll < 100) {
+        console.log(`  📰 News: fetching RSS only — bankroll $${currentBankroll.toFixed(2)} below $100 classification gate`);
+        const newItems = await fetchAllFeeds();
+        state.news_items_fetched += newItems;
+        state.last_news_cycle = Date.now();
+        if (newItems > 0) console.log(`     Fetched ${newItems} new items (classification skipped)`);
+        return;
+      }
+
       console.log("\n  📰 News intelligence cycle");
       const result = await runNewsIntelligenceCycle(getActiveMarkets);
       state.news_items_fetched += result.new_items;

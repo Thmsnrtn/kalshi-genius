@@ -75,3 +75,39 @@ export async function notifyStartup() {
 export async function notifyError(error: string) {
   await send(`❌ *Error*\n${error}`);
 }
+
+export async function notifyExit(ticker: string, pnl: number, reason: string, bankroll: number) {
+  const emoji = pnl >= 0 ? "✅" : "❌";
+  await send(
+    `${emoji} *Position Closed*\n` +
+    `${ticker}\n` +
+    `PnL: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}\n` +
+    `Reason: ${reason}\n` +
+    `Bankroll: $${bankroll.toFixed(2)}`
+  );
+}
+
+export async function notifyMilestone(milestone: number, bankroll: number, totalTrades: number) {
+  await send(
+    `🏆 *MILESTONE REACHED: $${milestone}*\n` +
+    `Bankroll: $${bankroll.toFixed(2)}\n` +
+    `Total trades: ${totalTrades}`
+  );
+}
+
+export async function notifyDailyDigest(stats: {
+  bankroll: number;
+  pnl: number;
+  trades: number;
+  wins: number;
+  apiCost: number;
+}) {
+  const emoji = stats.pnl >= 0 ? "📈" : "📉";
+  await send(
+    `${emoji} *Daily Digest*\n` +
+    `Bankroll: $${stats.bankroll.toFixed(2)}\n` +
+    `Today PnL: ${stats.pnl >= 0 ? "+" : ""}$${stats.pnl.toFixed(2)}\n` +
+    `Trades: ${stats.trades} (${stats.wins} wins)\n` +
+    `API cost: $${stats.apiCost.toFixed(2)}`
+  );
+}

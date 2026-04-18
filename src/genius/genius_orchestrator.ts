@@ -81,11 +81,13 @@ export async function deliberate(
   // Record this prediction for future calibration
   recordPrediction(calibratedProb, "cognitive_council");
 
-  // Decision gate: only trade if edge is still meaningful after calibration
-  const shouldTrade = verdict.verdict === "TAKE" && 
-                      calibratedEdge > 0.05 && 
-                      verdict.confidence > 0.5 &&
-                      verdict.council_agreement > 0.5;
+  // Decision gate: trade when edge exists and council leans toward action
+  // Lowered agreement from 0.5→0.35 to allow 2-of-4 member consensus
+  // Lowered edge from 0.05→0.03 — the calibration already corrected it
+  const shouldTrade = verdict.verdict === "TAKE" &&
+                      calibratedEdge > 0.03 &&
+                      verdict.confidence > 0.4 &&
+                      verdict.council_agreement > 0.35;
 
   return {
     ...verdict,
@@ -151,9 +153,19 @@ export function registerDecision(params: {
   });
 }
 
+// Bankroll getter — set by startGeniusLoops
+let _getBankroll: (() => number) | null = null;
+
 // ── GENIUS CYCLE: runs every 30 minutes ──
 // Breeding, culling, pattern discovery from counterfactuals
 export async function geniusCycle() {
+  // Bankroll gate: skip genius optimization when too small to justify API costs
+  const currentBankroll = _getBankroll?.() ?? 0;
+  if (currentBankroll < 25) {
+    console.log(`  🧠 [Genius] Skipping cycle — bankroll $${currentBankroll.toFixed(2)} below $25 gate`);
+    return;
+  }
+
   console.log(`\n  🧠 [G] Genius cycle`);
 
   try {
@@ -233,7 +245,8 @@ export async function geniusCycle() {
 }
 
 // ── Start genius loops ──
-export function startGeniusLoops() {
+export function startGeniusLoops(getBankroll?: () => number) {
+  _getBankroll = getBankroll ?? null;
   setInterval(() => geniusCycle().catch(console.error), 30 * 60 * 1000);
   setTimeout(() => geniusCycle().catch(console.error), 60 * 1000); // First run after 1 min
   console.log("✅ Genius loops engaged: Council deliberation + 30min genius cycles");
@@ -250,4 +263,7 @@ export function registerBaseHypotheses() {
   registerHypothesis("mispricing_high_edge_wins", "Mispricing wins when edge > 15%", 0.25);
   registerHypothesis("council_unanimous_wins", "Unanimous council verdicts have higher win rate", 0.30);
   registerHypothesis("late_cycle_sniper_wins", "Sniper wins more in final 10s of cycle", 0.25);
+  registerHypothesis("high_confidence_near_close", "85-94¢ markets closing <12h have >90% win rate", 0.10);
+  registerHypothesis("gfs_ensemble_beats_nws", "GFS ensemble edge > NWS point forecast edge", 0.20);
+  registerHypothesis("multi_model_consensus", "Multi-model ensemble wins when agreement >80%", 0.25);
 }
