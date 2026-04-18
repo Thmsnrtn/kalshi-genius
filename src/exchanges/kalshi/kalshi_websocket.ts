@@ -131,18 +131,20 @@ export class KalshiWebSocket {
   }
 
   private reconnect() {
-    if (this.reconnectAttempts >= 10) {
-      console.error("Kalshi WS: max reconnect attempts reached");
-      return;
-    }
+    // Unlimited reconnects — this bot runs 24/7
     this.reconnectAttempts++;
-    const delay = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
-    setTimeout(() => this.connect().catch(() => {}), delay);
+    const delay = Math.min(60000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 6)));
+    console.log(`  🔄 Kalshi WS reconnect attempt ${this.reconnectAttempts} in ${(delay / 1000).toFixed(0)}s`);
+    setTimeout(() => this.connect().catch((err) => {
+      console.error(`  ❌ Kalshi WS reconnect failed: ${err.message}`);
+    }), delay);
   }
 
   private send(payload: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
+    } else {
+      console.log(`  ⚠️ Kalshi WS send dropped (not connected): cmd=${payload.cmd}`);
     }
   }
 
@@ -163,6 +165,10 @@ export class KalshiWebSocket {
       // Apply delta to existing snapshot
       const ticker = msg.msg.market_ticker;
       const existing = this.orderbooks.get(ticker);
+      if (!existing) {
+        // Delta arrived before snapshot — can't apply, skip
+        return;
+      }
       if (existing) {
         const side = msg.msg.side === "yes" ? "yes" : "no";
         const price = msg.msg.price;

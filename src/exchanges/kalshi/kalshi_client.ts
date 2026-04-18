@@ -215,24 +215,59 @@ export class KalshiClient {
     };
   }
 
-  // ── Generic authenticated request ──
+  // ── Generic authenticated request with retry ──
   private async request<T>(method: string, path: string, body?: any): Promise<T> {
-    const { headers } = this.signRequest(method, path);
-    const url = `${this.baseUrl}${API_PREFIX}${path}`;
+    const maxRetries = method === "GET" ? 3 : 1; // Only retry idempotent reads
+    let lastError: Error | null = null;
 
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(15000),
-    });
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const { headers } = this.signRequest(method, path);
+        const url = `${this.baseUrl}${API_PREFIX}${path}`;
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Kalshi ${method} ${path} failed: ${res.status} ${text.slice(0, 200)}`);
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(15000),
+        });
+
+        // Rate limited — back off and retry
+        if (res.status === 429 && attempt < maxRetries) {
+          const retryAfter = parseInt(res.headers.get("retry-after") ?? "5");
+          console.log(`  ⏳ Kalshi rate limited, waiting ${retryAfter}s...`);
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+
+        // Server error — retry after exponential backoff
+        if (res.status >= 500 && attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.log(`  ⚠️ Kalshi ${res.status} on ${method} ${path.split("?")[0]}, retry in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Kalshi ${method} ${path} failed: ${res.status} ${text.slice(0, 200)}`);
+        }
+
+        return res.json() as Promise<T>;
+      } catch (err: any) {
+        lastError = err;
+        // Network errors / timeouts — retry on GET
+        if (attempt < maxRetries && method === "GET" && (err.name === "TimeoutError" || err.name === "AbortError" || err.code === "ECONNRESET" || err.code === "ENOTFOUND" || err.message?.includes("fetch failed"))) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.log(`  ⚠️ Kalshi ${err.name || err.code} on ${method} ${path.split("?")[0]}, retry in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
     }
 
-    return res.json() as Promise<T>;
+    throw lastError ?? new Error(`Kalshi request failed after ${maxRetries + 1} attempts`);
   }
 
   // ── Public market data (no auth required, but signing doesn't hurt) ──
