@@ -16,6 +16,7 @@
 
 import { createSign, createPrivateKey, type KeyObject } from "crypto";
 import { readFileSync } from "fs";
+import { isKillSwitchActive, killSwitchPath } from "../../core/kill_switch.js";
 
 // ── GLOBAL SPORTS MARKET EXCLUSION ──
 // Massachusetts legal constraint: Commonwealth v. KalshiEX preliminary injunction
@@ -406,6 +407,11 @@ export class KalshiClient {
     if (isExcludedMarket(order.ticker)) {
       console.log(`[Filter] BLOCKED order on excluded sports market: ${order.ticker}`);
       throw new Error(`Order blocked: ${order.ticker} is an excluded sports market`);
+    }
+    // Kill-switch: block opening new exposure (buy). Exits (sell) remain allowed so
+    // position_manager can still unwind positions during an emergency halt.
+    if (order.action === "buy" && isKillSwitchActive()) {
+      throw new Error(`Order blocked: kill-switch active (${killSwitchPath()})`);
     }
     return this.request("POST", "/portfolio/orders", order);
   }

@@ -94,6 +94,9 @@ import { updateCycleOpens } from "./core/turbo_probability.js";
 // AUTO-PAUSE (Operator Rule #1)
 import { initAutoPause, checkAutoPause, setAutoPauseCallback, clearAutoPause, getAutoPauseState, resetHighWaterMark } from "./core/auto_pause.js";
 
+// KILL-SWITCH (Operator Rule #2)
+import { initKillSwitch, isKillSwitchActive, killSwitchPath } from "./core/kill_switch.js";
+
 // DASHBOARD
 import { startDashboard, setBotState, pushActivity } from "./dashboard/server.js";
 
@@ -222,6 +225,9 @@ async function main() {
     console.error(`❌ Kalshi connection failed: ${err.message}`);
     process.exit(1);
   }
+
+  // ── Initialize kill-switch file watcher (Operator Rule #2) ──
+  initKillSwitch();
 
   // ── Initialize auto-pause-to-paper (Operator Rule #1) ──
   initAutoPause(bankroll);
@@ -1469,6 +1475,14 @@ async function executeTrade(kalshi: KalshiClient, params: {
 
   let result: any;
   const count = Math.max(1, Math.floor(params.size / params.price));
+
+  // Kill-switch: abort live order placement if operator has touched the STOP file.
+  // Open positions are still managed by position_manager; this only blocks new entries.
+  if (!config.DRY_RUN && isKillSwitchActive()) {
+    console.log(`  🛑 KILL-SWITCH ACTIVE — refusing live order on ${params.ticker}. Remove ${killSwitchPath()} to resume.`);
+    pushActivity("🛑", `Kill-switch blocked ${params.direction} ${params.ticker} ($${params.size.toFixed(2)})`);
+    return;
+  }
 
   if (config.DRY_RUN) {
     result = { status: "dry_run", ticker: params.ticker, direction: params.direction, size: params.size };

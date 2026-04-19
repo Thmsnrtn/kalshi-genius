@@ -28,6 +28,7 @@ const getWithdrawalState = () => ({});
 const confirmWithdrawal = (_a: number) => ({ success: false, reason: "archived" });
 import { getStrategyTelemetry, getCouncilTelemetry } from "../core/telemetry.js";
 import { snoozeDailyLoss, unsnoozeDailyLoss, isDailyLossSnoozed } from "../core/risk.js";
+import { isKillSwitchActive, killSwitchPath } from "../core/kill_switch.js";
 import { getTurboStats, getRecentTurboContext } from "../strategies/kalshi/turbo_tracker.js";
 import { getGrowthTargetState } from "../strategies/kalshi/turbo_brain.js";
 import { getAllPrices, detectCryptoSignal, detectCrossAssetCascade, predictSettlement, getPriceHistoryRaw } from "../feeds/binance.js";
@@ -167,6 +168,9 @@ function buildSnapshot() {
 
     // Auto-pause state (Operator Rule #1)
     auto_pause: botState?.getAutoPauseState?.() ?? null,
+
+    // Kill-switch state (Operator Rule #2)
+    kill_switch: { active: isKillSwitchActive({ force: true }), path: killSwitchPath() },
 
     // V4: Engine state for dashboard
     liquidity: getLiquidityState(),
