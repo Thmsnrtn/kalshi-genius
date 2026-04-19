@@ -2,6 +2,21 @@
 
 import { Database } from "bun:sqlite";
 import { join } from "path";
+import { config } from "./config.js";
+
+// Helper: `ALTER TABLE ADD COLUMN` is not idempotent on older SQLite. Wrap.
+function addColumnIfMissing(d: Database, table: string, column: string, ddl: string): void {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+// Returns the dry_run flag for the current runtime mode. Centralised so the
+// filter can't drift between writes and reads.
+function currentDryRunFlag(): 0 | 1 {
+  return config.DRY_RUN ? 1 : 0;
+}
 
 let db: Database | null = null;
 
@@ -233,6 +248,15 @@ function initSchema() {
     INSERT OR IGNORE INTO council_attribution (member_name, total_votes, correct_votes) VALUES
       ('bull', 0, 0), ('bear', 0, 0), ('quant', 0, 0), ('sage', 0, 0), ('judge', 0, 0);
   `);
+
+  // Migration: segregate paper (DRY_RUN) trades from calibration DB so paper
+  // resolutions don't poison Brier scores / council attribution that drive
+  // real-money sizing. Existing rows default to 0 (treated as live) — fine
+  // for the pre-flag era.
+  addColumnIfMissing(d, "positions",   "dry_run", "dry_run INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(d, "resolutions", "dry_run", "dry_run INTEGER NOT NULL DEFAULT 0");
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_positions_dryrun    ON positions(dry_run, status)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_resolutions_dryrun  ON resolutions(dry_run)`);
 }
 
 export function logAnalysis(a: Record<string, any>) {
@@ -283,19 +307,26 @@ export function openPosition(p: {
   ticker: string; order_id?: string; side: string; entry_price: number;
   contracts: number; size_usd: number; strategy: string;
   predicted_prob?: number; market_question?: string;
+  dry_run?: boolean;
 }) {
   const d = getDb();
+  const dryRun = (p.dry_run ?? config.DRY_RUN) ? 1 : 0;
   d.prepare(`
-    INSERT INTO positions (ticker, order_id, side, entry_price, entry_time, contracts, size_usd, strategy, status, peak_price, predicted_prob, market_question)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
-  `).run(p.ticker, p.order_id ?? null, p.side, p.entry_price, new Date().toISOString(), p.contracts, p.size_usd, p.strategy, p.entry_price, p.predicted_prob ?? null, p.market_question ?? null);
+    INSERT INTO positions (ticker, order_id, side, entry_price, entry_time, contracts, size_usd, strategy, status, peak_price, predicted_prob, market_question, dry_run)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+  `).run(p.ticker, p.order_id ?? null, p.side, p.entry_price, new Date().toISOString(), p.contracts, p.size_usd, p.strategy, p.entry_price, p.predicted_prob ?? null, p.market_question ?? null, dryRun);
 }
 
-export function getOpenPositions() {
+// Returns non-terminal positions matching the current runtime mode so paper
+// positions from a prior session don't flow into live position management (and
+// vice-versa). Pass { includeBoth: true } for the dashboard / reconciler views.
+export function getOpenPositions(opts?: { includeBoth?: boolean }) {
   const d = getDb();
-  // V5: Include all non-terminal positions — not just 'open'
-  // Positions with status like 'partially_closed', 'turbo_brain_exit:...' were getting stuck
-  return d.prepare(`SELECT * FROM positions WHERE status NOT IN ('settled','take_profit','trailing_stop','stop_loss','time_exit','turbo_cut','turbo_early_cut','stopped_out','chat_manual_close','market_closed','market_finalized','market_expired_exit_failed') ORDER BY entry_time ASC`).all() as any[];
+  const terminalClause = `status NOT IN ('settled','take_profit','trailing_stop','stop_loss','time_exit','turbo_cut','turbo_early_cut','stopped_out','chat_manual_close','market_closed','market_finalized','market_expired_exit_failed','reconcile_missing')`;
+  if (opts?.includeBoth) {
+    return d.prepare(`SELECT * FROM positions WHERE ${terminalClause} ORDER BY entry_time ASC`).all() as any[];
+  }
+  return d.prepare(`SELECT * FROM positions WHERE ${terminalClause} AND dry_run = ? ORDER BY entry_time ASC`).all(currentDryRunFlag()) as any[];
 }
 
 export function updatePositionPrice(id: number, currentPrice: number, peakPrice: number, unrealizedPnl: number) {
@@ -308,19 +339,26 @@ export function closePosition(id: number, exitPrice: number, exitReason: string,
   d.prepare(`UPDATE positions SET status = ?, exit_price = ?, exit_time = ?, exit_reason = ?, realized_pnl = ? WHERE id = ?`).run(exitReason, exitPrice, new Date().toISOString(), exitReason, realizedPnl, id);
 }
 
-// V3: Record resolution for calibration
+// V3: Record resolution for calibration.
+// Paper (dry_run) resolutions are still written to the `resolutions` table for
+// analysis, but do NOT update the `calibration` or `council_attribution`
+// aggregates — those drive real-money sizing and must only reflect live trades.
 export function logResolution(r: {
   ticker: string; market_question?: string; strategy?: string;
   predicted_prob: number; predicted_direction: string; entry_price: number;
   actual_result: number; pnl_cents: number;
   council_votes?: Record<string, string>;
+  dry_run?: boolean;
 }) {
   const d = getDb();
   const brierScore = Math.pow(r.predicted_prob - r.actual_result, 2);
+  const dryRun = (r.dry_run ?? config.DRY_RUN) ? 1 : 0;
   d.prepare(`
-    INSERT INTO resolutions (ticker, market_question, strategy, predicted_prob, predicted_direction, entry_price, actual_result, resolution_time, pnl_cents, brier_score, council_votes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(r.ticker, r.market_question ?? "", r.strategy ?? "", r.predicted_prob, r.predicted_direction, r.entry_price, r.actual_result, new Date().toISOString(), r.pnl_cents, brierScore, r.council_votes ? JSON.stringify(r.council_votes) : null);
+    INSERT INTO resolutions (ticker, market_question, strategy, predicted_prob, predicted_direction, entry_price, actual_result, resolution_time, pnl_cents, brier_score, council_votes, dry_run)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(r.ticker, r.market_question ?? "", r.strategy ?? "", r.predicted_prob, r.predicted_direction, r.entry_price, r.actual_result, new Date().toISOString(), r.pnl_cents, brierScore, r.council_votes ? JSON.stringify(r.council_votes) : null, dryRun);
+
+  if (dryRun) return; // Paper trade: do not feed calibration/council aggregates.
 
   // Update calibration bucket
   const bucket = getBucket(r.predicted_prob);
@@ -397,8 +435,8 @@ export function getStats() {
   const resolutionStats = d.prepare(`
     SELECT strategy, COUNT(*) as total, SUM(CASE WHEN actual_result = 1 AND predicted_direction = 'YES' OR actual_result = 0 AND predicted_direction = 'NO' THEN 1 ELSE 0 END) as correct,
     AVG(brier_score) as avg_brier, SUM(pnl_cents) as total_pnl
-    FROM resolutions WHERE actual_result IS NOT NULL GROUP BY strategy
-  `).all() as any[];
+    FROM resolutions WHERE actual_result IS NOT NULL AND dry_run = ? GROUP BY strategy
+  `).all(currentDryRunFlag()) as any[];
   return {
     total_trades: total?.c ?? 0,
     total_analyses: analyses?.c ?? 0,
@@ -422,12 +460,14 @@ export function setBotState(key: string, value: string): void {
     .run(key, value, Date.now(), value, Date.now());
 }
 
-// V3.1: Get today's realized PnL for daily loss limit
+// V3.1: Get today's realized PnL for daily loss limit.
+// Filters by current runtime mode so the live-trading loss limit isn't shifted
+// by paper PnL (positive or negative).
 export function getTodayPnl(): number {
   const d = getDb();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const row = d.prepare(`SELECT COALESCE(SUM(realized_pnl), 0) as total FROM positions WHERE exit_time > ? AND status != 'open'`).get(todayStart.toISOString()) as any;
+  const row = d.prepare(`SELECT COALESCE(SUM(realized_pnl), 0) as total FROM positions WHERE exit_time > ? AND status != 'open' AND dry_run = ?`).get(todayStart.toISOString(), currentDryRunFlag()) as any;
   return row?.total ?? 0;
 }
 
@@ -497,13 +537,15 @@ export function getFinancialStats(): {
   const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);
   const todayISO = todayStart.toISOString();
 
+  const flag = currentDryRunFlag();
+
   const lifetime = d.prepare(`SELECT
     COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0) as wins,
     COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0) as losses,
     COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END), 0) as win_amount,
     COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END), 0) as loss_amount,
     COALESCE(SUM(realized_pnl), 0) as pnl
-  FROM positions`).get() as any;
+  FROM positions WHERE dry_run = ?`).get(flag) as any;
 
   const today = d.prepare(`SELECT
     COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0) as wins,
@@ -511,16 +553,16 @@ export function getFinancialStats(): {
     COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END), 0) as win_amount,
     COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END), 0) as loss_amount,
     COALESCE(SUM(realized_pnl), 0) as pnl
-  FROM positions WHERE entry_time > ?`).get(todayISO) as any;
+  FROM positions WHERE entry_time > ? AND dry_run = ?`).get(todayISO, flag) as any;
 
   const byAsset = d.prepare(`SELECT
     CASE WHEN ticker LIKE '%BTC%' THEN 'BTC' WHEN ticker LIKE '%ETH%' THEN 'ETH' WHEN ticker LIKE '%SOL%' THEN 'SOL' ELSE 'XRP' END as asset,
     COUNT(*) as trades,
     SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) as wins,
     SUM(realized_pnl) as pnl
-  FROM positions GROUP BY asset ORDER BY pnl DESC`).all() as any[];
+  FROM positions WHERE dry_run = ? GROUP BY asset ORDER BY pnl DESC`).all(flag) as any[];
 
-  const byExit = d.prepare(`SELECT status, COUNT(*) as count, SUM(realized_pnl) as pnl FROM positions GROUP BY status ORDER BY pnl ASC`).all() as any[];
+  const byExit = d.prepare(`SELECT status, COUNT(*) as count, SUM(realized_pnl) as pnl FROM positions WHERE dry_run = ? GROUP BY status ORDER BY pnl ASC`).all(flag) as any[];
 
   // Peak balance from bankroll snapshots
   const peak = d.prepare(`SELECT MAX(bankroll) as peak FROM bankroll_snapshots`).get() as any;

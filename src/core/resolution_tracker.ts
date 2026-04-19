@@ -67,7 +67,8 @@ export async function checkResolutions(
       const exitPrice = actualResult === 1 ? 100 : 0;
       closePosition(pos.id, exitPrice, exitReason, pnlUsd);
 
-      // Log resolution for calibration
+      // Log resolution for calibration. Carry the position's dry_run flag so
+      // paper resolutions don't update real-money calibration aggregates.
       logResolution({
         ticker: pos.ticker,
         market_question: pos.market_question ?? market.title,
@@ -78,6 +79,7 @@ export async function checkResolutions(
         actual_result: actualResult,
         pnl_cents: pnlCents,
         council_votes: undefined,
+        dry_run: pos.dry_run === 1 || pos.dry_run === true,
       });
 
       console.log(
