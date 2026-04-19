@@ -97,6 +97,9 @@ import { initAutoPause, checkAutoPause, setAutoPauseCallback, clearAutoPause, ge
 // KILL-SWITCH (Operator Rule #2)
 import { initKillSwitch, isKillSwitchActive, killSwitchPath } from "./core/kill_switch.js";
 
+// STARTUP RECONCILIATION (Operator Rule #3)
+import { reconcileStartupPositions } from "./core/startup_reconciler.js";
+
 // DASHBOARD
 import { startDashboard, setBotState, pushActivity } from "./dashboard/server.js";
 
@@ -239,6 +242,16 @@ async function main() {
   });
 
   console.log(`🔒 Mode: ${config.DRY_RUN ? "PAPER (DRY_RUN=true)" : "LIVE (DRY_RUN=false)"} | Paused: ${paused} | Bankroll: $${bankroll.toFixed(2)}`);
+
+  // ── Startup reconciliation: diff local open positions against Kalshi live portfolio (Operator Rule #3) ──
+  try {
+    const report = await reconcileStartupPositions({ kalshi, isDryRun: config.DRY_RUN });
+    if (report.ran && (report.closed_as_missing.length > 0 || report.unknown_on_kalshi.length > 0 || report.errors.length > 0)) {
+      pushActivity("🔁", `Reconcile: closed ${report.closed_as_missing.length} stale, ${report.unknown_on_kalshi.length} untracked on Kalshi`);
+    }
+  } catch (err: any) {
+    console.warn(`⚠️  Startup reconcile crashed (non-fatal): ${err?.message ?? err}`);
+  }
 
   // ── Initialize Kalshi WebSocket ──
   let kalshiWs: KalshiWebSocket | null = null;
