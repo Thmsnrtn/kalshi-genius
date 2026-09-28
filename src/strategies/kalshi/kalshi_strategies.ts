@@ -15,6 +15,7 @@ const getEconomicEdge = (_m: any, _s?: any) => ({ edge: 0, edge_estimate: 0, dir
 const getWeatherEdge = (_m: any): any[] => [];
 import { detectOddsMovements, getSmartMoneySignal, type OddsMovement } from "../../feeds/odds_movement.js";
 import { detectCrossAssetCascade, predictSettlement, getPrice } from "../../feeds/binance.js";
+import { yesProbabilityFromChosenSide, grossProbabilityEdge } from "../../core/forecast_math.js";
 
 // ═══════════════════════════════════════════════════════════
 // STRATEGY 1: HOURLY CLOSE SNIPER
@@ -26,6 +27,8 @@ export interface HourlySniperSignal {
   direction: "YES" | "NO";
   contract_price: number;
   potential_return_pct: number;
+  model_probability_yes?: number; // Absent on legacy heuristic signals; never substitute confidence
+  gross_probability_edge?: number; // P(chosen side) - executable chosen-side price
   confidence: number;
   minutes_remaining: number;
   reasoning: string;
@@ -244,6 +247,8 @@ export async function scanHourlySniper(
                 ticker: m.ticker, market_question: m.title, direction: sig.direction,
                 contract_price: sig.price,
                 potential_return_pct: (1 - sig.price) / sig.price,
+                model_probability_yes: yesProbabilityFromChosenSide(sig.model_prob_win, sig.direction),
+                gross_probability_edge: grossProbabilityEdge(sig.model_prob_win, sig.price),
                 confidence: sig.confidence, minutes_remaining: minutesRemaining,
                 reasoning: `[TurboBrain] ${sig.reasoning} | signals: ${sig.signal_sources.join(",")}`,
                 smart_money_confirms: false,
