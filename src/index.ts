@@ -143,11 +143,13 @@ console.error = captureError;
 console.warn = (...args: any[]) => { captureLog("⚠️", ...args); origWarn(...args); };
 
 async function main() {
+  // Fail closed before any startup log, connection, scan, or dashboard control.
+  (config as any).DRY_RUN = true;
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║  🧠 KALSHI GENIUS V3 — BEAST MODE                         ║
+║  🧠 KALSHI GENIUS — FOUNDRY RESEARCH MODE                  ║
 ╠════════════════════════════════════════════════════════════╣
-║  8 Layers × Aggressive Kelly × Data-Driven Edge            ║
+║  Observations only; no order or simulated fill authority   ║
 ╚════════════════════════════════════════════════════════════╝`);
 
   const phase = getPhaseParams(bankroll);
@@ -156,7 +158,7 @@ async function main() {
   console.log(`  Bankroll:  $${bankroll.toFixed(2)}`);
   console.log(`  Phase:     ${phase.label}`);
   console.log(`  Kelly:     ${(phase.kelly * 100).toFixed(0)}% | Max Pos: ${(phase.maxPosPct * 100).toFixed(0)}% | Positions: ${phase.maxPositions}`);
-  console.log(`  Target:    $${nextMilestone} (${(nextMilestone / bankroll).toFixed(0)}x)`);
+  console.log("  Status:    Unverified forecasts; trading disabled");
 
   console.log("\n  ARCHITECTURE:");
   console.log("  1️⃣  STRATEGIES    → ⚡ sniper, 📐 arb, 📊 economic, 🌤️ weather+GFS, 🌐 cross-plat, 💹 MM, 🎯 high-conf, 🤖 ensemble");
@@ -229,6 +231,8 @@ async function main() {
   initAutoPause(bankroll);
   // A persisted pause is an execution state, not merely a dashboard message.
   if (getAutoPauseState().is_auto_paused) (config as any).DRY_RUN = true;
+  // This branch is a research quarantine; never advertise a live mode.
+  (config as any).DRY_RUN = true;
   setAutoPauseCallback((reason) => {
     (config as any).DRY_RUN = true;
     console.log(`🚨 AUTO-PAUSE: Switched to PAPER mode — ${reason}`);
@@ -279,6 +283,7 @@ async function main() {
     },
     // V4: Chat-driven controls
     closePosition: async (ticker: string) => {
+      if (config.DRY_RUN) return `Research-only: no paper exit or realized P&L recorded for ${ticker}.`;
       const positions = getOpenPositions();
       const pos = positions.find((p: any) => p.ticker === ticker);
       if (!pos) return `No open position found for ticker '${ticker}'. Open positions: ${positions.map((p: any) => p.ticker).join(", ") || "none"}`;
@@ -322,43 +327,12 @@ async function main() {
     },
     getLogs: (n: number) => logBuffer.slice(-n),
     setDryRun: (dry: boolean) => {
-      (config as any).DRY_RUN = dry;
-      console.log(`🔄 Mode changed via chat: ${dry ? "PAPER" : "🔴 LIVE"}`);
+      (config as any).DRY_RUN = true;
+      console.log(dry ? "🔬 Research mode remains active" : "🚫 Live mode disabled in this research branch");
     },
     // V5: Full agency controls
     placeTrade: async (ticker: string, direction: "YES" | "NO", size: number) => {
-      try {
-        const { market } = await kalshi.getMarket(ticker);
-        const side = direction.toLowerCase() as "yes" | "no";
-        const priceField = side === "yes" ? market.yes_ask : market.no_ask;
-        const priceDollars = priceField / 100;
-        const count = Math.max(1, Math.floor(size / priceDollars));
-
-        if (config.DRY_RUN) {
-          openPosition({
-            ticker, order_id: `chat-manual-${Date.now()}`, side: direction,
-            entry_price: priceField, contracts: count, size_usd: size,
-            strategy: "chat_manual", market_question: market.title,
-          });
-          openPositionCount++;
-          return `[PAPER] Placed ${direction} ${count}x ${ticker} @ ${priceField}¢, size $${size.toFixed(2)}. "${market.title}"`;
-        }
-
-        const result = await kalshi.placeOrder({
-          ticker, side, action: "buy", type: "limit", count,
-          yes_price: side === "yes" ? priceField : undefined,
-          no_price: side === "no" ? priceField : undefined,
-        });
-        openPosition({
-          ticker, order_id: result?.order?.order_id ?? `chat-${Date.now()}`,
-          side: direction, entry_price: priceField, contracts: count,
-          size_usd: size, strategy: "chat_manual", market_question: market.title,
-        });
-        openPositionCount++;
-        return `Placed ${direction} ${count}x ${ticker} @ ${priceField}¢, size $${size.toFixed(2)}. Order: ${result?.order?.order_id ?? "submitted"}. "${market.title}"`;
-      } catch (err: any) {
-        return `Trade failed: ${err.message}`;
-      }
+      return `Research-only: no ${direction} order or paper fill recorded for ${ticker} ($${size.toFixed(2)} requested).`;
     },
     setBankroll: (amount: number) => {
       bankroll = amount;
@@ -369,9 +343,9 @@ async function main() {
     getAutoPauseState,
     clearAutoPause: () => {
       clearAutoPause(bankroll);
-      (config as any).DRY_RUN = false;
-      console.log(`✅ Auto-pause cleared — switched back to LIVE mode`);
-      pushActivity("✅", `Auto-pause cleared — LIVE mode re-enabled at $${bankroll.toFixed(2)}`);
+      (config as any).DRY_RUN = true;
+      console.log("✅ Auto-pause cleared; research-only mode remains active");
+      pushActivity("✅", "Auto-pause cleared; live orders remain disabled");
     },
     resetHWM: () => {
       resetHighWaterMark(bankroll);
@@ -501,7 +475,9 @@ async function main() {
   startGeniusLoops(() => bankroll);
   startAlphaSources(() => cachedMarkets.map((m) => m.question).slice(0, 30), () => bankroll);
 
-  // ── Start Position Manager (exits) ──
+  // Legacy exit/resolution callbacks inferred fills and fed paper P&L into
+  // learning. Do not start them in this research-only branch.
+  if (!config.DRY_RUN) {
   startPositionManager(kalshi, (ticker, pnl, reason) => {
     if (config.DRY_RUN) {
       bankroll += pnl; // paper trading accumulator
@@ -575,6 +551,7 @@ async function main() {
     checkAutoPause(bankroll, config.DRY_RUN);
     checkMilestoneInline();
   });
+  }
 
   // ── Periodic bankroll sync from Kalshi (live mode only) ──
   if (config.KALSHI_ENV === "production") {
@@ -1381,17 +1358,9 @@ async function main() {
     console.log("🎯 Stale price sniper armed (20s scan)");
   }
 
-  console.log(`\n✅ ALL 14 SYSTEMS LIVE`);
+  console.log(`\n🔬 Research scanners active; order placement disabled`);
   console.log(`📱 Dashboard: http://localhost:${dashboardPort}`);
-  console.log(`🎯 Goal: $${bankroll.toFixed(2)} → $10,000+ via aggressive compounding\n`);
-
-  // Print compound growth projections
-  const { getCompoundingProjection } = await import("./core/aggressive_kelly.js");
-  const projections = getCompoundingProjection(bankroll, 0.08, 10, 30); // 8% edge, 10 trades/day, 30 days
-  console.log("  📊 Growth projections (8% avg edge, 10 trades/day):");
-  console.log(`     Day 7:  $${projections[7]?.toFixed(2) ?? "N/A"}`);
-  console.log(`     Day 14: $${projections[14]?.toFixed(2) ?? "N/A"}`);
-  console.log(`     Day 30: $${projections[30]?.toFixed(2) ?? "N/A"}\n`);
+  console.log("No trading profit is claimed from these observations.\n");
 }
 
 // ═══════════════════════════════════════════════════
