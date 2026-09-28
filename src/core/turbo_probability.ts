@@ -284,8 +284,8 @@ export function computeBinaryProbability(
 export interface MispricingResult {
   has_edge: boolean;
   direction: "YES" | "NO";
-  model_prob: number;        // our P(YES) from the probability model
-  kalshi_implied_prob: number; // Kalshi's implied P(YES) from ask price
+  model_prob: number;        // probability of winning on the chosen direction
+  kalshi_implied_prob: number; // ask price for the chosen direction
   raw_edge: number;          // model_prob - kalshi_implied (before fees)
   fee_cost: number;          // round-trip fee as fraction
   net_edge: number;          // raw_edge - fee_cost (this is the real edge)
