@@ -12,6 +12,7 @@
 // Layer 8: RESOLUTION       (feedback loop — track outcomes, calibrate, milestones)
 
 import { config, getPhaseParams } from "./core/config.js";
+import { capRiskAfterWeights } from "./core/forecast_math.js";
 import { calculatePosition, canTrade, meetsEdgeThreshold, getExposure } from "./core/risk.js";
 import { getDb, logTrade, logRejectedSignal, openPosition, getOpenPositions, closePosition as dbClosePosition, logMilestone, getCalibrationData, getCouncilAttribution, getMilestones, getCachedVerdict, setCachedVerdict, cleanExpiredCache, getBotState, setBotState as dbSetBotState } from "./core/db.js";
 import { notifyStartup, notifyTrade, notifyExit, notifyMilestone, notifyError } from "./core/notify.js";
@@ -225,6 +226,8 @@ async function main() {
 
   // ── Initialize auto-pause-to-paper (Operator Rule #1) ──
   initAutoPause(bankroll);
+  // A persisted pause is an execution state, not merely a dashboard message.
+  if (getAutoPauseState().is_auto_paused) (config as any).DRY_RUN = true;
   setAutoPauseCallback((reason) => {
     (config as any).DRY_RUN = true;
     console.log(`🚨 AUTO-PAUSE: Switched to PAPER mode — ${reason}`);
@@ -708,24 +711,31 @@ async function main() {
           // Hot strategies get 1.5x, cold get 0.3x, frozen = skip
           // ══════════════════════════════════════════════════
           const { applyWeightToSize } = await import("./evolution/strategy_weights.js");
+          if (sig.gross_probability_edge === undefined || sig.model_probability_yes === undefined ||
+              !Number.isFinite(sig.gross_probability_edge) ||
+              !Number.isFinite(sig.model_probability_yes) ||
+              sig.model_probability_yes < 0 || sig.model_probability_yes > 1) {
+            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: 0, confidence: sig.confidence, reject_reason: "missing_model_probability", market_question: sig.market_question, price: sig.contract_price });
+            continue;
+          }
           const turboMult = getTurboSizeMultiplier();
           const brainMult = sig.turbo_brain_size_multiplier ?? 1.0;  // TurboBrain asymmetric Kelly
-          const rawSize = calculatePosition(sig.potential_return_pct, sig.contract_price, bankroll, "hourly_sniper", {
+          const rawSize = calculatePosition(sig.gross_probability_edge, sig.contract_price, bankroll, "hourly_sniper", {
             confidence: sig.confidence,
             consecutive_wins: consecutiveWins,
           }) * confluenceBoost * adverseMultiplier * turboMult * brainMult;
           // V5: Hard max risk cap — no single trade should risk more than 10% of bankroll
           // The -$4.90 and -$6.39 losses were balance-killers
-          const maxTradeSize = Math.max(1.0, bankroll * 0.10);
+          const maxTradeSize = bankroll * 0.10;
           const cappedSize = Math.min(rawSize, maxTradeSize);
-          const size = applyWeightToSize("hourly_sniper", cappedSize);
+          const size = capRiskAfterWeights(applyWeightToSize("hourly_sniper", cappedSize), bankroll);
           if (size < 0.50) {
             telemetrySizeMin("hourly_sniper");
-            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.potential_return_pct, confidence: sig.confidence, reject_reason: "size_too_small", market_question: sig.market_question, price: sig.contract_price });
+            logRejectedSignal({ ticker: sig.ticker, strategy: "hourly_sniper", direction: sig.direction, edge: sig.gross_probability_edge, confidence: sig.confidence, reject_reason: "size_too_small", market_question: sig.market_question, price: sig.contract_price });
             continue;
           }
 
-          await executeTrade(kalshi, {
+          const submitted = await executeTrade(kalshi, {
             strategy: "hourly_sniper",
             category: "crypto",
             question: sig.market_question,
@@ -734,10 +744,12 @@ async function main() {
             price: sig.contract_price,
             size,
             reasoning: sig.reasoning,
-            edge: sig.potential_return_pct,
+            edge: sig.gross_probability_edge,
             confidence: sig.confidence,
+            predicted_prob: sig.model_probability_yes,
             hypothesisName: "hourly_sniper_final_minutes",
           });
+          if (!submitted) continue;
           telemetryTraded("hourly_sniper");
 
           // Record turbo entry for learning
@@ -1393,14 +1405,17 @@ async function executeTrade(kalshi: KalshiClient, params: {
   councilVerdict?: any;
   hypothesisName?: string;
   predicted_prob?: number;
-}) {
+}): Promise<boolean> {
+  if (getAutoPauseState().is_auto_paused && !config.DRY_RUN) {
+    throw new Error("Persisted auto-pause blocks live order submission");
+  }
   // ── Turbo-only mode: block all non-turbo trades ──
   const TURBO_PREFIXES = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"];
   if (config.TURBO_ONLY_MODE) {
     const isTurbo = TURBO_PREFIXES.some(p => params.ticker.startsWith(p));
     if (!isTurbo) {
       console.log(`  🚫 Turbo-only mode: blocked ${params.strategy} on ${params.ticker.slice(0, 30)}`);
-      return;
+      return false;
     }
   }
 
@@ -1417,7 +1432,7 @@ async function executeTrade(kalshi: KalshiClient, params: {
   const cb = canTradeCircuitBreaker();
   if (!cb.ok) {
     console.log(`  🛑 Circuit breaker: ${cb.reason}`);
-    return;
+    return false;
   }
   if (cb.size_multiplier < 1) {
     params.size *= cb.size_multiplier;
@@ -1428,7 +1443,7 @@ async function executeTrade(kalshi: KalshiClient, params: {
   const timeAdvice = getTimeAdvice();
   if (!timeAdvice.should_trade) {
     console.log(`  🕐 Time filter: ${timeAdvice.reason}`);
-    return;
+    return false;
   }
   if (timeAdvice.confidence_multiplier !== 1.0) {
     params.size *= timeAdvice.confidence_multiplier;
@@ -1465,10 +1480,22 @@ async function executeTrade(kalshi: KalshiClient, params: {
     confidence: params.confidence, verdict: params.councilVerdict,
   });
 
+  // Observation only: the old paper timer used a Binance proxy (and even
+  // compared snapshot objects), invented fills, and fed its P&L back into
+  // strategy learning. Preserve the decision record without a fake trade.
+  if (config.DRY_RUN) {
+    console.log(`  🔬 Research signal recorded for ${params.ticker}; no fill or P&L inferred`);
+    return false;
+  }
+
   // ARCHIVED: compound engine unlock/cap and velocity engine tranche allocation
 
   let result: any;
-  const count = Math.max(1, Math.floor(params.size / params.price));
+  const count = Math.floor(params.size / params.price);
+  if (count < 1 || !Number.isFinite(count)) {
+    console.log(`  🚫 Order size below one contract for ${params.ticker}`);
+    return false;
+  }
 
   if (config.DRY_RUN) {
     result = { status: "dry_run", ticker: params.ticker, direction: params.direction, size: params.size };
@@ -1532,6 +1559,7 @@ async function executeTrade(kalshi: KalshiClient, params: {
     edge: params.edge, confidence: params.confidence > 0.5 ? "high" : "medium",
     final_reasoning: params.reasoning, yes_price: params.price,
   } as any, params.size, config.DRY_RUN);
+  return true;
 }
 
 function simulateResolution(signalId: string, params: any) {
