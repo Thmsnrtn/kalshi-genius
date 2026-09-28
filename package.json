@@ -4,6 +4,7 @@
   "description": "Genius V3.1 — 8-layer cognitive Kalshi trading bot with bankroll-gated council",
   "type": "module",
   "scripts": {
+    "test:research": "node --test tests/*.test.mjs",
     "start": "bun run src/index.ts",
     "paper": "DRY_RUN=true bun run src/index.ts",
     "dashboard": "DRY_RUN=true DASHBOARD_PORT=3000 bun run src/index.ts"
