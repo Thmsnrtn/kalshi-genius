@@ -23,6 +23,7 @@ export interface TurboBrainSignal {
   asset: string;
   direction: "YES" | "NO";
   price: number;
+  model_prob_win: number;     // Forecast for the purchased side, before any empirical blend
   confidence: number;
   size_multiplier: number;    // Asymmetric sizing based on price + edge
   reasoning: string;
@@ -1841,6 +1842,7 @@ export function analyzeTurboOpportunity(params: {
       asset,
       direction,
       price,
+      model_prob_win: modelProb,
       confidence: isExplore ? confidence * 0.85 : confidence,
       size_multiplier: Math.max(0.2, Math.min(3.0, finalSizeMult)),
       reasoning: label + reasons.join(" | "),
