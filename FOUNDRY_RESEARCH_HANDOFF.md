@@ -17,8 +17,11 @@ reconciliation require replacement before an execution adapter can exist.
   its 10% cap; a sub-contract allocation is rejected instead of rounded up.
 - The shared strategy's dry-run path records the decision without inventing a
   fill or P&L. The old simulator remains in the source for historical reference
-  but is no longer reached through that path. Other dashboard/manual paper
-  paths have **not** been validated as Foundry evidence.
+  but is no longer reached through that path. Startup forces research mode;
+  chat cannot re-enable live mode or create a manual paper fill. The legacy
+  position manager and resolution callbacks are not started in research mode.
+  Historical position/P&L rows remain untrusted, and other dashboard paths
+  still need a full audit.
 - Model-bearing decisions append to `foundry-research-signals.ndjson` (or
   `FOUNDRY_RESEARCH_JOURNAL_PATH`). This is an append-only observation export,
   explicitly labeled `unverified` rule, `none` fill and `unknown` outcome.
