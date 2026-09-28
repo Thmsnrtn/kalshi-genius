@@ -402,12 +402,9 @@ export class KalshiClient {
   }
 
   async placeOrder(order: KalshiOrderRequest): Promise<KalshiOrderResponse> {
-    // Belt-and-suspenders: block sports orders even if market filter was somehow bypassed
-    if (isExcludedMarket(order.ticker)) {
-      console.log(`[Filter] BLOCKED order on excluded sports market: ${order.ticker}`);
-      throw new Error(`Order blocked: ${order.ticker} is an excluded sports market`);
-    }
-    return this.request("POST", "/portfolio/orders", order);
+    // Research quarantine: this adapter uses the legacy order endpoint and does
+    // not reconcile accepted orders with actual fills. Keep reads/cancels usable.
+    throw new Error(`Legacy Kalshi order placement disabled for ${order.ticker}; rebuild against current API and reconcile fills first`);
   }
 
   async cancelOrder(orderId: string): Promise<any> {
