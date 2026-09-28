@@ -19,6 +19,10 @@ reconciliation require replacement before an execution adapter can exist.
   fill or P&L. The old simulator remains in the source for historical reference
   but is no longer reached through that path. Other dashboard/manual paper
   paths have **not** been validated as Foundry evidence.
+- Model-bearing decisions append to `foundry-research-signals.ndjson` (or
+  `FOUNDRY_RESEARCH_JOURNAL_PATH`). This is an append-only observation export,
+  explicitly labeled `unverified` rule, `none` fill and `unknown` outcome.
+  It contains no proof of an edge and must be imported by Foundry as research.
 
 ## Remaining gaps before Foundry integration
 
