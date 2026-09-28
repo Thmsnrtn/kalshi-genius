@@ -13,6 +13,7 @@
 
 import { config, getPhaseParams } from "./core/config.js";
 import { capRiskAfterWeights } from "./core/forecast_math.js";
+import { appendResearchForecast } from "./core/research_journal.js";
 import { calculatePosition, canTrade, meetsEdgeThreshold, getExposure } from "./core/risk.js";
 import { getDb, logTrade, logRejectedSignal, openPosition, getOpenPositions, closePosition as dbClosePosition, logMilestone, getCalibrationData, getCouncilAttribution, getMilestones, getCachedVerdict, setCachedVerdict, cleanExpiredCache, getBotState, setBotState as dbSetBotState } from "./core/db.js";
 import { notifyStartup, notifyTrade, notifyExit, notifyMilestone, notifyError } from "./core/notify.js";
@@ -1479,6 +1480,14 @@ async function executeTrade(kalshi: KalshiClient, params: {
     strategy: params.strategy, bankroll,
     confidence: params.confidence, verdict: params.councilVerdict,
   });
+
+  if (params.predicted_prob !== undefined) {
+    appendResearchForecast({
+      signal_id: signalId, ticker: params.ticker, direction: params.direction,
+      model_p_yes: params.predicted_prob, chosen_side_ask: params.price,
+      strategy: params.strategy,
+    });
+  }
 
   // Observation only: the old paper timer used a Binance proxy (and even
   // compared snapshot objects), invented fills, and fed its P&L back into
